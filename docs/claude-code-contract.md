@@ -137,7 +137,7 @@ plugin/
 {
   "hooks": {
     "SessionEnd": [
-      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/on-session-end.sh", "timeout": 5 } ] }
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/on-session-end.sh" } ] }
     ]
   }
 }
