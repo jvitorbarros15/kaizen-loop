@@ -321,7 +321,20 @@ def test_slash_command_made_readable(tmp_path):
         "<command-args>bar baz</command-args>"
     )
     bare = "<command-message>foo</command-message>\n<command-name>/foo</command-name>"
-    assert prompts_of(tmp_path, cmd, bare) == ["/foo bar baz", "/foo"]
+    name_first = (
+        "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n"
+        "<command-args></command-args>"
+    )
+    with_args = (
+        "<command-name>/foo</command-name>\n<command-message>foo</command-message>\n"
+        "<command-args>bar</command-args>"
+    )
+    assert prompts_of(tmp_path, cmd, bare, name_first, with_args) == [
+        "/foo bar baz",
+        "/foo",
+        "/compact",
+        "/foo bar",
+    ]
 
 
 def test_interruptions_counted_not_prompts(tmp_path):

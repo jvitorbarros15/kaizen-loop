@@ -74,6 +74,9 @@ def _strip(text: str) -> str:
                 return s
             command = name[0].strip()
             rest = name[1].lstrip()
+            message = _section(rest, "command-message")
+            if message is not None:
+                rest = message[1].lstrip()
             args = _section(rest, "command-args")
             if args is not None:
                 command = f"{command} {args[0].strip()}".strip()
