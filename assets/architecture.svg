@@ -1,15 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="840" height="360" viewBox="0 0 840 360" role="img" aria-labelledby="t d"><title id="t">System architecture</title><desc id="d">The session-end hook passes a transcript path to the Python core. Redacted runs are saved locally. The judge can use an external backend on allowlisted repos.</desc><defs><marker id="ffae63" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L6 3L0 6" fill="none" stroke="#ffae63" stroke-width="1.5"/></marker><marker id="82dfbe" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L6 3L0 6" fill="none" stroke="#82dfbe" stroke-width="1.5"/></marker><marker id="93bfff" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L6 3L0 6" fill="none" stroke="#93bfff" stroke-width="1.5"/></marker><marker id="ffa39c" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L6 3L0 6" fill="none" stroke="#ffa39c" stroke-width="1.5"/></marker><marker id="f4f1e9" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L6 3L0 6" fill="none" stroke="#f4f1e9" stroke-width="1.5"/></marker><marker id="c2c8cf" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L6 3L0 6" fill="none" stroke="#c2c8cf" stroke-width="1.5"/></marker></defs><style>text{font-family:system-ui,'Segoe UI',sans-serif}.pulse{animation:travel 4s linear infinite}@keyframes travel{to{stroke-dashoffset:-100}}@media(prefers-reduced-motion:reduce){.pulse{display:none}}</style><rect width="840" height="360" rx="18" fill="#161b20"/><g><path d="M243 87H277" fill="none" stroke="#ffae63" stroke-width="2" marker-end="url(#ffae63)"/><path class="pulse" d="M243 87H277" pathLength="100" fill="none" stroke="#ffae63" stroke-width="4" stroke-linecap="round" stroke-dasharray="7 93"/>
-<path d="M527 87H562" fill="none" stroke="#82dfbe" stroke-width="2" marker-end="url(#82dfbe)"/><path class="pulse" d="M527 87H562" pathLength="100" fill="none" stroke="#82dfbe" stroke-width="4" stroke-linecap="round" stroke-dasharray="7 93"/>
-<path d="M402 134V193" fill="none" stroke="#93bfff" stroke-width="2" marker-end="url(#93bfff)"/><path class="pulse" d="M402 134V193" pathLength="100" fill="none" stroke="#93bfff" stroke-width="4" stroke-linecap="round" stroke-dasharray="7 93"/>
-<path d="M527 244H562" fill="none" stroke="#82dfbe" stroke-width="2" marker-end="url(#82dfbe)"/><path class="pulse" d="M527 244H562" pathLength="100" fill="none" stroke="#82dfbe" stroke-width="4" stroke-linecap="round" stroke-dasharray="7 93"/>
-<path d="M278 245H244" fill="none" stroke="#93bfff" stroke-width="2" marker-end="url(#93bfff)"/><path class="pulse" d="M278 245H244" pathLength="100" fill="none" stroke="#93bfff" stroke-width="4" stroke-linecap="round" stroke-dasharray="7 93"/>
-<g><rect x="24" y="40" width="219" height="94" rx="13" fill="#21282e" stroke="#435057"/><text x="40" y="62" fill="#ffae63" font-size="12" font-weight="700">CLAUDE CODE PLUGIN</text><text x="40" y="89" fill="#f4f1e9" font-size="22" font-weight="700">Session-end hook</text><text x="40" y="115" fill="#c2c8cf" font-size="16" font-weight="500">Pass transcript path</text></g>
-<g><rect x="280" y="40" width="247" height="94" rx="13" fill="#21282e" stroke="#435057"/><text x="296" y="62" fill="#ffae63" font-size="12" font-weight="700">PYTHON CORE</text><text x="296" y="89" fill="#f4f1e9" font-size="22" font-weight="700">Ingest</text><text x="296" y="115" fill="#c2c8cf" font-size="16" font-weight="500">Parse → redact → store</text></g>
-<g><rect x="565" y="40" width="251" height="94" rx="13" fill="#21282e" stroke="#435057"/><text x="581" y="62" fill="#82dfbe" font-size="12" font-weight="700">LOCAL · ~/.kaizen</text><text x="581" y="89" fill="#f4f1e9" font-size="22" font-weight="700">Run storage</text><text x="581" y="115" fill="#c2c8cf" font-size="16" font-weight="500">Run JSON + SQLite ledger</text></g>
-<g><rect x="280" y="196" width="247" height="94" rx="13" fill="#21282e" stroke="#435057"/><text x="296" y="218" fill="#93bfff" font-size="12" font-weight="700">PYTHON CORE</text><text x="296" y="245" fill="#f4f1e9" font-size="22" font-weight="700">Evaluate</text><text x="296" y="271" fill="#c2c8cf" font-size="16" font-weight="500">Signals → judge → score</text></g>
-<g><rect x="565" y="196" width="251" height="94" rx="13" fill="#21282e" stroke="#435057"/><text x="581" y="218" fill="#82dfbe" font-size="12" font-weight="700">CLI</text><text x="581" y="245" fill="#f4f1e9" font-size="22" font-weight="700">Report</text><text x="581" y="271" fill="#c2c8cf" font-size="16" font-weight="500">Scores, usage and waste</text></g>
-<rect x="24" y="196" width="219" height="128" rx="13" fill="#21282e" stroke="#435057"/>
-<text x="40" y="219" fill="#93bfff" font-size="12" font-weight="700">ALLOWLISTED REPOS</text>
-<text x="40" y="247" fill="#f4f1e9" font-size="22" font-weight="700">External judge</text>
-<text x="40" y="274" fill="#c2c8cf" font-size="16" font-weight="500">Receives a redacted</text>
-<text x="40" y="296" fill="#c2c8cf" font-size="16" font-weight="500">summary only</text></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="252" viewBox="0 0 840 252" role="img" aria-labelledby="title desc">
+  <title id="title">Architecture</title>
+  <desc id="desc">A Claude Code session-end hook sends the transcript path into the Python core. The core parses, redacts, stores, evaluates and reports. Run JSON and SQLite stay local. An external judge receives redacted summaries only for allowlisted repositories.</desc>
+  <defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="m1 1 5 3-5 3" fill="none" stroke="#74776e"/></marker></defs>
+  <style>
+    text { font-family: 'Segoe UI', Arial, sans-serif; fill: #292c29 }
+    .label { font-size: 21px; font-weight: 600 }
+    .body { font-size: 16px; fill: #484d47 }
+    .note { font-family: Consolas, monospace; font-size: 14px; fill: #63675f }
+    .line { stroke: #74776e; stroke-width: 1.4; fill: none }
+    .rule { stroke: #d7d8d0 }
+    .signal { animation: trace 5s linear infinite }
+    @keyframes trace { to { stroke-dashoffset: -100 } }
+    @media (prefers-reduced-motion: reduce) { .signal { display: none } }
+  </style>
+  <rect width="840" height="252" fill="#faf8f3"/>
+  <text x="30" y="44" class="label">Claude Code</text>
+  <text x="30" y="71" class="body">Session-end hook</text>
+  <path d="M176 49 H232" class="line" marker-end="url(#arrow)"/>
+  <text x="253" y="44" class="label">Python core</text>
+  <text x="253" y="71" class="body">Parse → redact → store</text>
+  <text x="253" y="98" class="body">Signals → judge → score</text>
+  <path d="M489 49 H559" class="line" marker-end="url(#arrow)"/>
+  <text x="582" y="44" class="label">CLI report</text>
+  <text x="582" y="71" class="body">Scores, usage and waste</text>
+  <path d="M269 115 V151 H59 V170" class="line" marker-end="url(#arrow)"/>
+  <path d="M447 115 V151 H504 V170" class="line" marker-end="url(#arrow)"/>
+  <text x="40" y="197" class="label">Local storage</text>
+  <text x="40" y="224" class="body">Run JSON and SQLite ledger in ~/.kaizen</text>
+  <text x="482" y="197" class="label">External judge</text>
+  <text x="482" y="224" class="body">Redacted summary for allowlisted repos</text>
+</svg>
