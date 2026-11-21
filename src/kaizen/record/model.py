@@ -71,6 +71,7 @@ class RunRecord:
     cost_usd: float | None = None
     parent_session_id: str | None = None
     skipped_lines: int = 0
+    interruptions: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -94,4 +95,5 @@ class RunRecord:
             cost_usd=d["cost_usd"],
             parent_session_id=d["parent_session_id"],
             skipped_lines=d["skipped_lines"],
+            interruptions=d["interruptions"],
         )

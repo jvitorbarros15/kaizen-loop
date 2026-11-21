@@ -264,3 +264,89 @@ def test_session_folds_subagent():
     assert r.user_messages == parent.user_messages == ["Check the build in the background"]
     assert r.session_id == "00000000-0000-4000-8000-0000000000aa"
     assert r.parent_session_id is None
+
+
+def user_line(content, **extra):
+    return {"type": "user", "message": {"role": "user", "content": content}, **extra}
+
+
+def prompts_of(tmp_path, *contents):
+    return parse_transcript(write(tmp_path, [user_line(c) for c in contents])).user_messages
+
+
+def test_leading_harness_sections_stripped_from_string(tmp_path):
+    text = (
+        "<ide_opened_file>The user opened a.py</ide_opened_file>\n"
+        '<browser_instruction kind="x">\nlots\n</browser_instruction>\n\n'
+        "<ide_selection>sel</ide_selection>real task <b>kept</b>"
+    )
+    assert prompts_of(tmp_path, text) == ["real task <b>kept</b>"]
+
+
+def test_leading_harness_blocks_stripped_from_list(tmp_path):
+    blocks = [
+        {"type": "text", "text": "<ide_opened_file>x</ide_opened_file>"},
+        {"type": "text", "text": "<local-command-caveat>c</local-command-caveat>\nask"},
+        {"type": "text", "text": "more"},
+    ]
+    assert prompts_of(tmp_path, blocks) == ["ask\nmore"]
+
+
+def test_only_harness_text_is_not_a_prompt(tmp_path):
+    assert prompts_of(
+        tmp_path,
+        "<ide_opened_file>x</ide_opened_file>\n<system-reminder>y</system-reminder>",
+        "<local-command-stdout>out</local-command-stdout>",
+        [{"type": "text", "text": "<task-notification>t</task-notification>"}],
+    ) == []
+
+
+def test_unclosed_harness_tag_means_all_harness(tmp_path):
+    assert prompts_of(tmp_path, "<browser_instruction>never closed and real-looking text") == []
+
+
+def test_tags_not_in_list_or_mid_prompt_are_kept(tmp_path):
+    pasted = '<pasted_content id="1">data</pasted_content> why?'
+    mid = "look at this <system-reminder>x</system-reminder> please"
+    assert prompts_of(tmp_path, pasted, mid, "<ide_opened_fileX>a</ide_opened_fileX>") == [
+        pasted,
+        mid,
+        "<ide_opened_fileX>a</ide_opened_fileX>",
+    ]
+
+
+def test_slash_command_made_readable(tmp_path):
+    cmd = (
+        "<command-message>foo</command-message>\n<command-name>/foo</command-name>\n"
+        "<command-args>bar baz</command-args>"
+    )
+    bare = "<command-message>foo</command-message>\n<command-name>/foo</command-name>"
+    assert prompts_of(tmp_path, cmd, bare) == ["/foo bar baz", "/foo"]
+
+
+def test_interruptions_counted_not_prompts(tmp_path):
+    p = write(tmp_path, [
+        user_line("[Request interrupted by user]"),
+        user_line("[Request interrupted by user for tool use]"),
+        user_line([{"type": "text", "text": "[Request interrupted by user]"}]),
+        user_line("real"),
+    ])
+    r = parse_transcript(p)
+    assert r.user_messages == ["real"] and r.interruptions == 3
+    assert RunRecord.from_dict(r.to_dict()) == r
+
+
+def test_huge_pasted_prompt_is_fast(tmp_path):
+    big = "<" * 2_000_000
+    assert prompts_of(tmp_path, big) == [big]
+
+
+def test_synthetic_model_usage_skipped_but_tool_calls_kept(tmp_path):
+    u0 = {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0}
+    p = write(tmp_path, [
+        assistant("s", [tool_use("t1")], u0, model="<synthetic>"),
+        assistant("r", [], {**u0, "output_tokens": 3}),
+    ])
+    r = parse_transcript(p)
+    assert list(r.usage_by_model) == ["m1"]
+    assert [c.id for c in r.tool_calls] == ["t1"]

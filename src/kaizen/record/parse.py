@@ -6,7 +6,18 @@ from kaizen.record.model import RunRecord, ToolCall, Usage
 
 MAX_TEXT = 2000
 EXIT_CODE = re.compile(r"^Exit code (\d+)")
-NOT_PROMPTS = ("<task-notification>", "<system-reminder>")
+HARNESS_TAGS = (
+    "system-reminder",
+    "task-notification",
+    "ide_opened_file",
+    "ide_selection",
+    "browser_instruction",
+    "local-command-stdout",
+    "local-command-stderr",
+    "local-command-caveat",
+    "command-message",
+)
+INTERRUPTED = "[Request interrupted by user"
 
 
 def _cut(value):
@@ -35,6 +46,61 @@ def _text(content) -> str:
     return ""
 
 
+def _section(s: str, tag: str) -> tuple[str, str] | None:
+    open_tag = "<" + tag
+    nxt = s[len(open_tag):len(open_tag) + 1]
+    if not s.startswith(open_tag) or not (nxt == ">" or nxt.isspace()):
+        return None
+    start = s.find(">")
+    if start == -1:
+        return "", ""
+    end = s.find("</" + tag + ">", start)
+    if end == -1:
+        return "", ""
+    return s[start + 1:end], s[end + len(tag) + 3:]
+
+
+def _strip(text: str) -> str:
+    s = text.lstrip()
+    while s.startswith("<"):
+        for tag in HARNESS_TAGS:
+            hit = _section(s, tag)
+            if hit is not None:
+                s = hit[1].lstrip()
+                break
+        else:
+            name = _section(s, "command-name")
+            if name is None or not name[0]:
+                return s
+            command = name[0].strip()
+            rest = name[1].lstrip()
+            args = _section(rest, "command-args")
+            if args is not None:
+                command = f"{command} {args[0].strip()}".strip()
+                rest = args[1]
+            rest = _strip(rest)
+            return f"{command}\n{rest}" if rest else command
+    return s
+
+
+def _prompt(content) -> tuple[str, int]:
+    if isinstance(content, str):
+        parts = [content]
+    elif isinstance(content, list):
+        parts = [b["text"] for b in content if isinstance(b, dict) and isinstance(b.get("text"), str)]
+    else:
+        return "", 0
+    kept = []
+    interruptions = 0
+    for part in parts:
+        text = _strip(part)
+        if text.startswith(INTERRUPTED):
+            interruptions += 1
+        elif text:
+            kept.append(text)
+    return _strip("\n".join(kept)), interruptions
+
+
 def _repo(cwd: str) -> str | None:
     windows = "\\" in cwd or re.match(r"^[A-Za-z]:", cwd) is not None
     name = (PureWindowsPath(cwd) if windows else PurePosixPath(cwd)).name
@@ -56,6 +122,7 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
     started = ""
     ended = ""
     skipped = 0
+    interruptions = 0
     cost = None
     usage_by_msg: dict[str, tuple[str, Usage]] = {}
     calls: list[ToolCall] = []
@@ -103,7 +170,7 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
 
             if kind == "assistant":
                 u = msg.get("usage")
-                if isinstance(u, dict):
+                if isinstance(u, dict) and not str(msg.get("model") or "").startswith("<"):
                     key = msg.get("id")
                     if not isinstance(key, str):
                         key = f"line-{n}"
@@ -152,8 +219,9 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
                         else:
                             call.exit_code = 0
                 if not has_result and obj.get("isMeta") is not True:
-                    text = _text(content)
-                    if text and not text.lstrip().startswith(NOT_PROMPTS):
+                    text, interrupted = _prompt(content)
+                    interruptions += interrupted
+                    if text:
                         prompts.append(text)
             elif kind == "cost-state":
                 total = obj.get("totalCostUSD")
@@ -185,6 +253,7 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
         cost_usd=cost,
         parent_session_id=None,
         skipped_lines=skipped,
+        interruptions=interruptions,
     )
 
 
