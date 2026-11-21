@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/kaizen-loop-orbit.png" alt="kaizen-loop logo" width="160">
+</p>
+
 # kaizen-loop
 
 Self-improvement loops for coding agents, with cheap local decision models in the loop.
