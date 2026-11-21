@@ -28,21 +28,7 @@ kaizen-loop closes that gap. It records each agent session, scores it against re
 
 ## How it works
 
-```mermaid
-flowchart TD
-    A([Agent session ends]) -->|hook| B[Record<br/>redact secrets, store locally]
-    B --> C[Score<br/>real signals + blind judge]
-    C --> D[(Ledger)]
-    D -->|daily batch| E[Improve<br/>rewrite one skill from failure clusters]
-    E --> F{Benchmark<br/>before vs after,<br/>hidden half decides}
-    F -->|pass, low-risk zone| G[Pull request, auto-merge]
-    F -->|pass, review zone| H[Pull request, waits for a human]
-    F -->|fail| I[Discarded, logged with the reason]
-    G --> J[Watch real-use score]
-    H --> J
-    J -->|score drops| K[Automatic revert + notice]
-    J -->|score holds| A
-```
+![Session recording, benchmark decisions and real-use feedback](assets/improvement-loop.svg)
 
 Every improvement carries a number: score before, score after, cost before, cost after.
 
@@ -60,27 +46,7 @@ Every improvement carries a number: score before, score after, cost before, cost
 
 An agent-neutral Python core does the work. Each supported agent gets a thin adapter. Claude Code is the first.
 
-```mermaid
-flowchart LR
-    subgraph Adapter["Agent adapter (Claude Code plugin)"]
-        H[Session-end hook]
-    end
-    subgraph Core["kaizen core (Python, standard library only)"]
-        P[parse] --> R[redact] --> S[store]
-        S --> G[signals]
-        G --> J[judge]
-        J --> SC[score]
-        SC --> RP[report]
-    end
-    subgraph Local["~/.kaizen (never leaves the machine)"]
-        F[(One JSON file per run)]
-        L[(SQLite ledger)]
-    end
-    H -->|transcript path| P
-    S --- F
-    S --- L
-    J -.->|redacted summary only,<br/>allowlisted repos| X[Judge from another model family]
-```
+![Claude Code adapter, Python core, local storage and external judge](assets/architecture.svg)
 
 | Module | Job |
 |---|---|
