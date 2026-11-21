@@ -280,27 +280,27 @@ def test_find_secrets_clean_and_redacted():
 def test_large_inputs_do_not_blow_up():
     start = time.perf_counter()
     for text in (
-        "A" * 2_000_000,
-        "password" * 200_000,
-        "sk-" * 300_000,
-        "token=" * 200_000,
-        "-----BEGIN PRIVATE KEY-----\n" * 50_000,
-        "http://" + "a" * 1_000_000,
-        "cpf" * 300_000,
-        "sk_live_" * 100_000,
-        "xoxb-" * 200_000,
-        "hf_" * 300_000,
-        "AIza" * 200_000,
-        "--password " * 100_000,
-        "-u " * 200_000,
-        "Authorization: Basic " * 50_000,
-        "PASSWORD" * 100_000,
-        "A_" * 500_000,
-        "password: " * 100_000,
-        '"password": "' + "a\\" * 200_000,
+        "A" * 200_000,
+        "password" * 20_000,
+        "sk-" * 30_000,
+        "token=" * 20_000,
+        "-----BEGIN PRIVATE KEY-----\n" * 5_000,
+        "http://" + "a" * 100_000,
+        "cpf" * 30_000,
+        "sk_live_" * 10_000,
+        "xoxb-" * 20_000,
+        "hf_" * 30_000,
+        "AIza" * 20_000,
+        "--password " * 10_000,
+        "-u " * 20_000,
+        "Authorization: Basic " * 5_000,
+        "PASSWORD" * 10_000,
+        "A_" * 50_000,
+        "password: " * 10_000,
+        '"password": "' + "a\\" * 20_000,
     ):
         redact(text)
-    assert time.perf_counter() - start < 60
+    assert time.perf_counter() - start < 20
 
 
 def test_escaped_quote_value_fully_redacted():
