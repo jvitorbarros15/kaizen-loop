@@ -28,7 +28,7 @@ kaizen-loop closes that gap. It records each agent session, scores it against re
 
 ## How it works
 
-![Session recording, benchmark decisions and real-use feedback](assets/improvement-loop.svg)
+![Animated improvement loop: record, score, improve, benchmark, pull request, watch, and repeat](assets/kaizen-loop-workflow-animated.png)
 
 Every improvement carries a number: score before, score after, cost before, cost after.
 
@@ -46,7 +46,7 @@ Every improvement carries a number: score before, score after, cost before, cost
 
 An agent-neutral Python core does the work. Each supported agent gets a thin adapter. Claude Code is the first.
 
-![Claude Code adapter, Python core, local storage and external judge](assets/architecture.svg)
+![Claude Code adapter, Python core, local storage and external judge](assets/kaizen-loop-architecture.png)
 
 | Module | Job |
 |---|---|
