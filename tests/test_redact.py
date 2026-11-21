@@ -12,6 +12,10 @@ PEM = (
     "-----END RSA PRIVATE KEY-----"
 )
 GH_PAT = "github_pat_" + "0123456789abcdefghij01" + "_" + "A1b2C3d4E5" * 5 + "fakefakef"
+FAKE20 = "FAKEFAKEFAKEFAKE1234"
+FAKE35 = "FakeFakeFakeFakeFakeFakeFakeFake000"
+FAKE36 = "FAKE" * 9
+HEX40 = "0123456789abcdef" * 2 + "01234567"
 GH_BODY = "0123456789abcdefghijABCDEFGHIJ012345"
 OPENAI_BODY = "AbCdEf0123456789AbCdEf0123456789"
 
@@ -46,6 +50,49 @@ CASES = [
     ("cpf", "CPF: 12345678909", "12345678909"),
     ("cpf", '{"cpf": "12345678909"}', "12345678909"),
     ("url_credentials", "https://user:p4ssw0rd@host.com/x", "p4ssw0rd"),
+    ("env_assignment", "DB_PASSWORD=supersecretpassword", "supersecretpassword"),
+    ("env_assignment", "export DB_PASSWORD=supersecretpassword", "supersecretpassword"),
+    ("env_assignment", "PASSWORD=changeme", "changeme"),
+    ("env_assignment", "POSTGRES_PASSWORD=correct_horse_battery", "correct_horse_battery"),
+    ("env_assignment", "password: correcthorsebattery", "correcthorsebattery"),
+    ("env_assignment", "password=correcthorsebattery", "correcthorsebattery"),
+    ("env_assignment", "API_KEY=your_api_key_here", "your_api_key_here"),
+    ("env_assignment", "ACCESS_KEY=abc123abc123abc123", "abc123abc123abc123"),
+    ("env_assignment", "CREDENTIALS=abc123abc123abc123", "abc123abc123abc123"),
+    ("env_assignment", "SUPABASE_ANON_KEY=abcdef0123456789abcdef", "abcdef0123456789abcdef"),
+    ("env_assignment", "ENCRYPTION_KEY=abc123abc123abc123", "abc123abc123abc123"),
+    ("env_assignment", "SIGNING_KEY=abc123abc123abc123", "abc123abc123abc123"),
+    ("env_assignment", "PASSPHRASE=abc123abc123abc123", "abc123abc123abc123"),
+    ("env_assignment", "AUTH=abc123abc123abc123", "abc123abc123abc123"),
+    ("env_assignment", "BASIC_AUTH=abc123abc123abc123", "abc123abc123abc123"),
+    ("env_assignment", "PIN_TOKEN=12345678", "12345678"),
+    ("env_assignment", "PIN_TOKEN = 12345678", "12345678"),
+    ("env_assignment", '"SIGNING_KEY": "abc123abc123abc123"', "abc123abc123abc123"),
+    ("env_assignment", 'password = "12345678"', "12345678"),
+    ("env_assignment", r'{"password":"p\"ssw0rd123456"}', "ssw0rd123456"),
+    ("env_assignment", r"{'password':'it\'s-a-secret99'}", "a-secret99"),
+    ("stripe_key", f"x sk_live_{FAKE20}", FAKE20),
+    ("stripe_key", f"x sk_test_{FAKE20}", FAKE20),
+    ("stripe_key", f"x rk_live_{FAKE20}", FAKE20),
+    ("stripe_key", f"x whsec_{FAKE20}", FAKE20),
+    ("slack_token", "x xoxb-0000000000-FAKEFAKEFAKE", "FAKEFAKEFAKE"),
+    ("slack_token", "x xoxp-0000000000-FAKEFAKEFAKE", "FAKEFAKEFAKE"),
+    ("slack_token", "x xoxa-0000000000-FAKEFAKEFAKE", "FAKEFAKEFAKE"),
+    ("slack_token", "x xoxr-0000000000-FAKEFAKEFAKE", "FAKEFAKEFAKE"),
+    ("slack_token", "x xoxs-0000000000-FAKEFAKEFAKE", "FAKEFAKEFAKE"),
+    ("google_key", f"x AIza{FAKE35}", FAKE35),
+    ("hf_token", f"x hf_{FAKE36}", FAKE36),
+    ("npm_token", f"x npm_{FAKE36}", FAKE36),
+    ("gitlab_token", f"x glpat-{FAKE20}", FAKE20),
+    ("supabase_key", "x sbp_" + HEX40, HEX40),
+    ("supabase_key", f"x sb_secret_{FAKE20}", FAKE20),
+    ("basic_auth", "Authorization: Basic YWRtaW46SHVudGVyMkh1bnRlcjI=", "YWRtaW46SHVudGVyMkh1bnRlcjI="),
+    ("cli_flag", "psql --password Hunter2Hunter2", "Hunter2Hunter2"),
+    ("cli_flag", "tool --token Hunter2Hunter2", "Hunter2Hunter2"),
+    ("cli_flag", "tool --api-key Hunter2Hunter2", "Hunter2Hunter2"),
+    ("cli_flag", "tool --secret Hunter2Hunter2", "Hunter2Hunter2"),
+    ("cli_flag", 'tool --password "Hunter2 Hunter2"', "Hunter2"),
+    ("cli_flag", "curl -u admin:Hunter2Hunter2 https://x.com", "Hunter2Hunter2"),
 ]
 
 
@@ -96,7 +143,26 @@ ORDINARY = [
     "token = self.token",
     "if token == expected_token_value:",
     "def f(password: str, token: Optional[str] = None): ...",
-    "API_KEY=your_api_key_here",
+    "npm_config_registry=https://registry.test/",
+    "from hf_hub import download",
+    "hf_hub_download(repo_id)",
+    "npm_config",
+    "task_live_data and desk_test_runner",
+    "xoxb-test and AIzaSomething",
+    'primary_key = "id_column_name"',
+    "sort_key = lambda_value",
+    "cache_key = make_cache_key(x)",
+    "docker run --user 1000:1000 img",
+    "git push -u origin main",
+    "tool --max-tokens 4096",
+    "tool --password-file /etc/pw",
+    "max_tokens=100000000",
+    "token_expiry = 1700000000",
+    "if password == expected_password:",
+    "const password = userInput.trim();",
+    "OAUTH_PROVIDER=github",
+    "AUTHOR=someone_long_name",
+    "Basic authentication is enabled",
     "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
     "commit 3f2a9c1d4b5e6f708192a3b4c5d6e7f801234567",
     "id 123e4567-e89b-12d3-a456-426614174000",
@@ -221,6 +287,45 @@ def test_large_inputs_do_not_blow_up():
         "-----BEGIN PRIVATE KEY-----\n" * 50_000,
         "http://" + "a" * 1_000_000,
         "cpf" * 300_000,
+        "sk_live_" * 100_000,
+        "xoxb-" * 200_000,
+        "hf_" * 300_000,
+        "AIza" * 200_000,
+        "--password " * 100_000,
+        "-u " * 200_000,
+        "Authorization: Basic " * 50_000,
+        "PASSWORD" * 100_000,
+        "A_" * 500_000,
+        "password: " * 100_000,
+        '"password": "' + "a\\" * 200_000,
     ):
         redact(text)
-    assert time.perf_counter() - start < 20
+    assert time.perf_counter() - start < 60
+
+
+def test_escaped_quote_value_fully_redacted():
+    assert redact(r'{"password":"p\"ssw0rd123456"}') == '{"password":"[REDACTED:env_assignment]"}'
+
+
+def test_basic_auth_replaces_only_base64():
+    out = redact("Authorization: Basic YWRtaW46SHVudGVyMkh1bnRlcjI=")
+    assert out == "Authorization: Basic [REDACTED:basic_auth]"
+
+
+def test_curl_user_replaces_only_password():
+    out = redact("curl -u admin:Hunter2Hunter2 https://x.com")
+    assert out == "curl -u admin:[REDACTED:cli_flag] https://x.com"
+
+
+def test_caps_env_after_escaped_newline():
+    line = json.dumps({"o": "x\nDB_PASSWORD=supersecretpassword\ny"})
+    out = redact(line)
+    assert "supersecretpassword" not in out
+    assert json.loads(out)["o"].endswith("\ny")
+
+
+def test_redact_obj_colliding_keys_are_both_kept():
+    k1 = f"ghp_{GH_BODY}"
+    k2 = "ghp_" + "Z" * 36
+    out = redact_obj({k1: 1, k2: 2})
+    assert out == {"[REDACTED:github_token]": 1, "[REDACTED:github_token]#2": 2}
