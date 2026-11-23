@@ -415,6 +415,35 @@ def test_pass_markers(out):
     assert run_of("pytest | tail", out).tests_passed_last is True
 
 
+@pytest.mark.parametrize(
+    "out",
+    [
+        "Tests:       0 failed, 5 passed, 5 total",
+        "handled 2 errors as expected\n15 passed in 0.4s",
+        "retried 1 failed request\n=== 250 passed in 2.1s ===",
+        "FAIL\nprinted by a test of error formatting\n3 passed in 0.1s",
+        "1 failed\n" + "x" * 990 + "\n[... 5000 characters omitted ...]\n" + "y" * 900 + "\n=== 9 passed in 2.1s ===",
+    ],
+)
+def test_log_noise_does_not_turn_a_passing_run_into_a_failure(out):
+    assert run_of("pytest | tail", out).tests_passed_last is True
+
+
+@pytest.mark.parametrize(
+    "out",
+    [
+        "ℹ tests 0\nℹ pass 0\nℹ fail 0",
+        "ℹ fail 0",
+    ],
+)
+def test_node_runner_with_nothing_passed_is_unknown(out):
+    assert run_of("npm test | tail", out).tests_passed_last is None
+
+
+def test_node_runner_cancelled_test_is_a_failure():
+    assert run_of("npm test | tail", "ℹ pass 3\nℹ fail 0\nℹ cancelled 1").tests_passed_last is False
+
+
 @pytest.mark.parametrize("out", ["", "collecting...", "0 passed", "0 failed"])
 def test_no_markers_unknown(out):
     assert run_of("pytest | tail", out).tests_passed_last is None

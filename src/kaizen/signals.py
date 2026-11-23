@@ -67,24 +67,27 @@ CHECK_SCRIPT = re.compile(r"^(typecheck|type-check|lint|build|check)")
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 WINDOWS_PATH = re.compile(r"^([A-Za-z]:[\\/]|\\\\)")
 
+OMITTED_MARKER = "\n[... "
+# A runner summary line is only counts ("1 failed, 2 passed in 0.1s"); log lines such as
+# "handled 2 errors as expected" must not decide the result.
+_COUNTS = r"^[\s=]*(?:\d+ [a-z]+, )*{item}(?:, \d+ [a-z]+)*(?: in [\d.]+s[^\n]*)?[\s=]*$"
 FAIL_PATTERNS = (
-    r"(?<![\w.])[1-9]\d* failed\b",
-    r"(?<![\w.])[1-9]\d* errors?\b",
+    _COUNTS.format(item=r"[1-9]\d* (?:failed|errors?)"),
     r"\bFAILED \(",
-    r"^\s*(?:Tests|Test Files|Test Suites):?\s.*\bfailed\b",
-    r"^\s*FAIL\b",
-    r"^\s*(?:#|ℹ)\s*fail\s+[1-9]\d*",
+    r"^\s*(?:Tests|Test Files|Test Suites):?\s.*\b[1-9]\d* failed\b",
+    r"^\s*FAIL(?:[ \t]+\S)",
+    r"^\s*(?:#|ℹ)\s*(?:fail|cancelled)\s+[1-9]\d*",
     r"^\s*✖ failing tests",
     r"--- FAIL",
     r"test result: FAILED",
     r"\bFailed!",
 )
 PASS_PATTERNS = (
-    r"(?<![\w.])[1-9]\d* passed\b",
+    _COUNTS.format(item=r"[1-9]\d* passed"),
     r"^OK \(",
     r"^\s*OK\s*$",
-    r"^\s*Tests:?\s.*\bpassed\b",
-    r"^\s*(?:#|ℹ)\s*fail\s+0\b",
+    r"^\s*Tests:?\s.*\b[1-9]\d* passed\b",
+    r"^\s*(?:#|ℹ)\s*pass\s+[1-9]\d*",
     r"^ok ",
     r"test result: ok",
     r"\bPassed!",
@@ -283,6 +286,9 @@ def is_test_command(command: str) -> bool:
 
 
 def read_output(output: str) -> bool | None:
+    marker = output.rfind(OMITTED_MARKER)
+    if marker != -1:
+        output = output[marker:]
     if FAIL_RE.search(output):
         return False
     if PASS_RE.search(output):
@@ -293,7 +299,7 @@ def read_output(output: str) -> bool | None:
 def run_result(kind: str, position: str, exit_code: int | None, is_error: bool, output: str) -> bool | None:
     if position == "last":
         return exit_code == 0 if exit_code is not None else not is_error
-    if position == "and" and exit_code == 0:
+    if position == "and" and (exit_code == 0 or (exit_code is None and not is_error)):
         return True
     return read_output(output) if kind == "test" else None
 
