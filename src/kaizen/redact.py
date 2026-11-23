@@ -25,6 +25,11 @@ _UNQ = rf"(?P<secret>[^{_TERM}]{{8,}}+)"
 _BOUNDARY = r"(?:(?<![A-Za-z0-9_])|(?<=\\[nrt]))"
 _SK_BOUNDARY = r"(?:(?<![A-Za-z0-9_-])|(?<=\\[nrt]))"
 _PEM_KIND = r"(?:[A-Z]+ )*PRIVATE KEY(?: BLOCK)?"
+_PW_NAME = r"(?!PWD=)(?:[A-Z0-9_]{0,60}?_)?(?:PASSWORD|PASSWD|PWD)(?:_[A-Z0-9_]{0,40}+)?"
+_PW_EXCLUDED = (
+    r"(?!\$[A-Za-z_{(]|%[^%\s]+%"
+    r"""|(?i:true|false|yes|no|on|off|null|none|nil)(?![^\s"'`\\&;,<>|]))"""
+)
 _FLAGS = (
     "password|passwd|pass|token|api-key|apikey|api_key|secret|client-secret"
     "|auth-token|access-token|access-key|secret-key"
@@ -60,10 +65,22 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "supabase_key",
         re.compile(
-            _BOUNDARY + r"sbp_[A-Za-z0-9]{30,}|sb_secret_[A-Za-z0-9_-]{20,}"
+            _BOUNDARY + r"(?:sbp_[A-Za-z0-9]{30,}|sb_secret_[A-Za-z0-9_-]{20,})"
         ),
     ),
+    ("pypi_token", re.compile(_BOUNDARY + r"pypi-AgEI[A-Za-z0-9_-]{50,}")),
+    (
+        "sendgrid_key",
+        re.compile(_BOUNDARY + r"SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43,}"),
+    ),
     ("aws_key", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])")),
+    (
+        "azure_key",
+        re.compile(
+            _BOUNDARY + r"(?i:AccountKey|SharedAccessKey)=" + _NOT_MARKER
+            + r"""(?P<secret>[^;\s"'`\\]{20,}+)"""
+        ),
+    ),
     (
         "jwt",
         re.compile(r"eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*"),
@@ -90,14 +107,29 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "cli_flag",
         re.compile(
-            r"""(?<![\w-])(?:-u|--user)[ \t]+(?![0-9]+:)[^\s:"'\\]+:""" + _NOT_MARKER
-            + r"""(?P<secret>[^\s"'\\]+)"""
+            rf"(?<![\w-])--(?:{_FLAGS})=" + _NOT_MARKER
+            + r"""(?P<secret>"(?:[^"\\\r\n]|\\.)*+"|'[^'\r\n]*+'|[^\s"'\\]++)"""
+        ),
+    ),
+    (
+        "cli_flag",
+        re.compile(
+            r"""(?<![\w-])(?:-u(?:[ \t]+|(?=[^\s=-]))|--user[ \t=]+)["']?(?![0-9]+:)"""
+            r"""[^\s:="'\\]+:""" + _NOT_MARKER + r"""(?P<secret>[^\s"'\\]+)"""
         ),
     ),
     (
         "url_credentials",
         re.compile(
-            r"""(?<=://)[^\s:/@"']+:""" + _NOT_MARKER + r"""(?P<secret>[^\s@/"']+)(?=@)"""
+            r"""(?<=://)[^\s:/@"'\[\]]+:""" + _NOT_MARKER + r"""(?P<secret>[^\s@/"']+)(?=@)"""
+        ),
+    ),
+    ("url_credentials", re.compile(r"(?<=://)[A-Za-z0-9._~%+=-]{16,}+(?=@)")),
+    (
+        "url_signature",
+        re.compile(
+            r"(?:(?<![\w-])(?i:x-amz-signature|x-goog-signature)|(?<=[?&])(?i:sig))="
+            + _NOT_MARKER + r"""(?P<secret>[^&\s"'`\\]+)"""
         ),
     ),
     (
@@ -118,6 +150,13 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "env_assignment",
         re.compile(
             _NAME_CAPS + r"=(?!=)" + _NOT_MARKER + r"""(?P<secret>[^\s"'`\\&;,<>|]{8,}+)"""
+        ),
+    ),
+    (
+        "env_assignment",
+        re.compile(
+            _ID_START + _PW_NAME + r"""=(?!=)["']?""" + _NOT_MARKER + _PW_EXCLUDED
+            + r"""(?P<secret>[^\s"'`\\&;,<>|]{4,}+)"""
         ),
     ),
     (
@@ -183,8 +222,25 @@ def find_secrets(text: str) -> list[str]:
     return _scrub(text)[1]
 
 
-def redact_obj(obj: Any) -> Any:
+_CRED_KEY_PARTS = (
+    "password", "passwd", "secret", "token", "apikey", "privatekey",
+    "credential", "passphrase", "accesskey",
+)
+_CRED_KEY_EXACT = frozenset({"authorization", "cookie", "setcookie", "auth", "pwd"})
+_MARKER_ONLY = re.compile(r"\[REDACTED:[a-z_]+\]")
+
+
+def _is_credential_key(key: Any) -> bool:
+    if not isinstance(key, str):
+        return False
+    norm = key.lower().replace("-", "").replace("_", "")
+    return norm in _CRED_KEY_EXACT or any(p in norm for p in _CRED_KEY_PARTS)
+
+
+def _walk(obj: Any, masked: bool) -> Any:
     if isinstance(obj, str):
+        if masked:
+            return obj if not obj or _MARKER_ONLY.fullmatch(obj) else "[REDACTED:field]"
         return redact(obj)
     if isinstance(obj, dict):
         out: dict[Any, Any] = {}
@@ -195,10 +251,14 @@ def redact_obj(obj: Any) -> Any:
                 while f"{key}#{n}" in out:
                     n += 1
                 key = f"{key}#{n}"
-            out[key] = redact_obj(v)
+            out[key] = _walk(v, masked or _is_credential_key(k))
         return out
     if isinstance(obj, list):
-        return [redact_obj(v) for v in obj]
+        return [_walk(v, masked) for v in obj]
     if isinstance(obj, tuple):
-        return tuple(redact_obj(v) for v in obj)
+        return tuple(_walk(v, masked) for v in obj)
     return obj
+
+
+def redact_obj(obj: Any) -> Any:
+    return _walk(obj, False)
