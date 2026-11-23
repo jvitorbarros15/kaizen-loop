@@ -1,7 +1,11 @@
 import argparse
 import contextlib
 import json
+import os
+import subprocess
 import sys
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from kaizen import __version__
@@ -16,7 +20,7 @@ from kaizen.pipeline import (
     scored_runs,
 )
 from kaizen.report import calibration_summary, render_report
-from kaizen.store import Store
+from kaizen.store import Store, kaizen_home
 
 RUNNER = run_subprocess
 SUSPECTS_SHOWN = 20
@@ -32,9 +36,59 @@ def say(text: str = "") -> None:
     print(text)
 
 
+def log_hook(error: str, message: str) -> None:
+    with contextlib.suppress(Exception):
+        text = " ".join(str(message).split())[:200]
+        line = f"{datetime.now(UTC).isoformat()} {error} {text}\n"
+        with open(kaizen_home() / "hook.log", "a", encoding="utf-8") as f:
+            f.write(line)
+
+
 def cmd_record(args) -> int:
-    say(f"{record_session(Path(args.transcript), Store())} recorded")
+    try:
+        session_id = record_session(Path(args.transcript), Store())
+    except Exception as exc:
+        log_hook(type(exc).__name__, f"record failed: {exc}")
+        return 1
+    say(f"{session_id} recorded")
     return 0
+
+
+def detached_options() -> dict:
+    devnull = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    if sys.platform == "win32":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        return {**devnull, "creationflags": flags}
+    return {**devnull, "start_new_session": True}
+
+
+def hook_session_end(stdin, spawn: Callable[..., object] = subprocess.Popen) -> int:
+    try:
+        if os.environ.get("KAIZEN_INTERNAL"):
+            return 0
+        try:
+            payload = json.loads(stdin.read())
+        except ValueError as exc:
+            log_hook(type(exc).__name__, f"hook input is not JSON: {exc}")
+            return 0
+        path = payload.get("transcript_path") if isinstance(payload, dict) else None
+        if not isinstance(path, str) or not path:
+            log_hook("BadPayload", "no transcript_path string in hook input")
+            return 0
+        if not Path(path).is_file():
+            log_hook("MissingTranscript", "transcript file does not exist")
+            return 0
+        spawn(
+            [sys.executable, "-m", "kaizen.cli", "record", "--transcript", path],
+            **detached_options(),
+        )
+    except Exception as exc:
+        log_hook(type(exc).__name__, str(exc))
+    return 0
+
+
+def cmd_hook(args) -> int:
+    return hook_session_end(sys.stdin)
 
 
 def cmd_import(args) -> int:
@@ -193,6 +247,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--transcript", required=True)
     p.set_defaults(func=cmd_record)
 
+    p = sub.add_parser("hook", help="entry points for Claude Code hooks")
+    p.add_argument("event", choices=["session-end"])
+    p.set_defaults(func=cmd_hook)
+
     p = sub.add_parser("import", help="record every transcript under the projects directory")
     p.add_argument("--limit", type=int)
     p.add_argument("--projects-dir", default=str(Path.home() / ".claude" / "projects"))
@@ -231,3 +289,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
     return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

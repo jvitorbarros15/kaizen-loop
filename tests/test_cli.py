@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 
 import pytest
 
@@ -131,3 +133,118 @@ def test_score_line_tells_abstained_from_unavailable():
     missing = {"score": score, "verdict": {"backend": None, "quality": None, "abstained": False}}
     assert _score_line("s1", abstained).endswith("haiku (abstained)")
     assert _score_line("s1", missing).endswith("unavailable")
+
+
+class FakeStdin:
+    def __init__(self, text):
+        self.text = text
+
+    def read(self):
+        return self.text
+
+
+class RaisingStdin:
+    def read(self):
+        raise AssertionError("stdin was read")
+
+
+class Spawner:
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append((argv, kwargs))
+        if self.error:
+            raise self.error
+
+
+def hook_log_lines(home):
+    path = home / "hook.log"
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+def run_hook(text, spawn):
+    return cli.hook_session_end(FakeStdin(text), spawn)
+
+
+@pytest.fixture
+def transcript(tmp_path):
+    path = tmp_path / "s.jsonl"
+    path.write_text("{}\n", encoding="utf-8")
+    return path
+
+
+def test_hook_spawns_detached_record(home, transcript, capsys, monkeypatch):
+    monkeypatch.delenv("KAIZEN_INTERNAL", raising=False)
+    spawn = Spawner()
+    payload = json.dumps({"transcript_path": str(transcript), "session_id": "x", "extra": [1]})
+    assert run_hook(payload, spawn) == 0
+    assert len(spawn.calls) == 1
+    argv, kwargs = spawn.calls[0]
+    assert argv[0] == sys.executable
+    assert argv[1:] == ["-m", "kaizen.cli", "record", "--transcript", str(transcript)]
+    assert kwargs["stdin"] is subprocess.DEVNULL
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
+    if sys.platform == "win32":
+        assert kwargs["creationflags"] == (
+            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        )
+        assert "start_new_session" not in kwargs
+    else:
+        assert kwargs["start_new_session"] is True
+        assert "creationflags" not in kwargs
+    assert capsys.readouterr() == ("", "")
+    assert hook_log_lines(home) == []
+
+
+def test_hook_internal_guard_does_not_read_stdin(home, monkeypatch, capsys):
+    monkeypatch.setenv("KAIZEN_INTERNAL", "1")
+    spawn = Spawner()
+    assert cli.hook_session_end(RaisingStdin(), spawn) == 0
+    assert spawn.calls == []
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["not json", "[1, 2]", "{}", '{"transcript_path": 5}', '{"transcript_path": "/no/such/file.jsonl"}'],
+)
+def test_hook_bad_input_logs_one_line(home, text, capsys, monkeypatch):
+    monkeypatch.delenv("KAIZEN_INTERNAL", raising=False)
+    spawn = Spawner()
+    assert run_hook(text, spawn) == 0
+    assert spawn.calls == []
+    assert capsys.readouterr() == ("", "")
+    assert len(hook_log_lines(home)) == 1
+
+
+def test_hook_spawn_failure_logs_one_line(home, transcript, capsys, monkeypatch):
+    monkeypatch.delenv("KAIZEN_INTERNAL", raising=False)
+    spawn = Spawner(OSError("cannot start"))
+    assert run_hook(json.dumps({"transcript_path": str(transcript)}), spawn) == 0
+    assert capsys.readouterr() == ("", "")
+    lines = hook_log_lines(home)
+    assert len(lines) == 1
+    assert "OSError" in lines[0]
+
+
+def test_hook_log_message_is_cut(home, monkeypatch):
+    monkeypatch.delenv("KAIZEN_INTERNAL", raising=False)
+    assert run_hook("x" * 1000, Spawner()) == 0
+    assert len(hook_log_lines(home)[0]) < 300
+
+
+def test_hook_command_never_prints_or_fails(home, monkeypatch, capsys):
+    monkeypatch.delenv("KAIZEN_INTERNAL", raising=False)
+    monkeypatch.setattr(sys, "stdin", RaisingStdin())
+    assert main(["hook", "session-end"]) == 0
+    assert capsys.readouterr() == ("", "")
+    assert len(hook_log_lines(home)) == 1
+
+
+def test_record_failure_logs_and_returns_1(home, tmp_path, capsys):
+    assert main(["record", "--transcript", str(tmp_path / "missing.jsonl")]) == 1
+    assert capsys.readouterr() == ("", "")
+    assert len(hook_log_lines(home)) == 1

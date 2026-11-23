@@ -234,3 +234,15 @@ Rule: session content and long instructions never go in argv. With `.CMD` shims 
 - Observed: the multi-line rubric with a real double-quoted JSON example, passed through the file, gave 8 valid answers out of 8 on the first call (synthetic packet), mean cost about 0.00054 USD per call.
 - The file is created per call in a fresh temp directory and removed in a `finally`. No argv element of either caller contains a line break or a double quote; the data stays on stdin.
 - Not needed: the stdin `<instructions>` block fallback, since the file flag worked.
+
+## 9. The kaizen plugin hook
+
+Observed on 2026-11-23, Claude Code 2.1.328, Windows 11 with Git Bash. Plugin loaded with `claude --plugin-dir <worktree>/plugin`, a temporary `KAIZEN_HOME`, `kaizen.exe` from the project's virtual environment on `PATH`, scratch folder under the system temp dir, no Claude Code settings file changed.
+
+- **Observed:** `claude plugin validate <plugin>` passed with one warning (no icon, a directory-listing nicety only). The `hooks/hooks.json` with the top-level `"hooks"` wrapper and no `timeout` key loaded.
+- **Observed:** the hook command (`kaizen hook session-end`) run ten times with a small synthetic transcript on stdin took 275 to 326 ms wall (median about 295 ms), measured with the bash shell around the command, so including `kaizen.exe` start-up. About a fifth of the 1.5 s budget. Each run produced the stored run in the background and printed nothing.
+- **Observed:** a real `claude --plugin-dir <plugin> -p "say hi" --model haiku` with stdin redirected produced the run file in the temp store within the first polling interval after the call returned. `hook.log` was never created and `kaizen report` ran.
+- **Observed:** resuming that session (`-p --resume <session-id>`) fired the hook again with the same `session_id`; the store still held exactly one run file for it, and the file now contained the resumed prompt (latest wins).
+- **Observed:** with `KAIZEN_INTERNAL=1` set for the same `claude --plugin-dir ...` call, no run appeared and no store was created.
+- **Observed:** the detached child's console never appeared; the hook returned before the recording finished. Not checked: behaviour in the interactive terminal UI, and whether a hook slower than 1.5 s is killed.
+- **Not tested:** the persistent install through a local marketplace (`claude plugin marketplace add`, `claude plugin install`), since it would change the user-level Claude Code configuration.
