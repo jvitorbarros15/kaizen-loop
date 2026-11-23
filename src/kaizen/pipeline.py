@@ -1,5 +1,6 @@
 import contextlib
 import sqlite3
+import tempfile
 from dataclasses import asdict, fields
 from pathlib import Path
 
@@ -18,8 +19,17 @@ def find_transcripts(projects_dir: Path) -> list[Path]:
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def record_session(transcript: Path, store: Store) -> str:
+def _in_temp_dir(cwd: str) -> bool:
+    def norm(p: str) -> str:
+        return p.replace(chr(92), "/").lower().rstrip("/")
+
+    return bool(cwd) and (norm(cwd) + "/").startswith(norm(tempfile.gettempdir()) + "/")
+
+
+def record_session(transcript: Path, store: Store, skip_temp: bool = False) -> str | None:
     record = parse_session(transcript)
+    if skip_temp and _in_temp_dir(record.cwd):
+        return None
     store.save_run(record)
     return record.session_id
 

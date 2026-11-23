@@ -79,10 +79,13 @@ def _project_block(name: str, runs: list[dict], width: int) -> list[str]:
         f"interruptions {_sum(runs, 'interruptions'):,}",
     ]
     qualities = [q for q in map(_quality, runs) if q is not None]
+    abstained = sum(bool((r.get("verdict") or {}).get("abstained")) for r in runs)
+    missing = len(runs) - len(qualities) - abstained
     judged = (
-        f"judge quality {mean(qualities):.1f} avg ({len(qualities)} graded, {len(runs) - len(qualities)} unavailable)"
+        f"judge quality {mean(qualities):.1f} avg "
+        f"({len(qualities)} graded, {abstained} abstained, {missing} unavailable)"
         if qualities
-        else f"judge quality: unavailable for all {len(runs)} runs"
+        else f"judge quality: none ({abstained} abstained, {missing} unavailable)"
     )
     totals = [t for t in map(_total, runs) if t is not None]
     if totals:
@@ -138,10 +141,11 @@ def render_report(store: Store, last: int = 20) -> str:
 
     rereads: Counter[str] = Counter()
     for run in runs:
-        rereads.update(_signals(run).get("reread_files") or {})
+        for path, n in (_signals(run).get("reread_files") or {}).items():
+            rereads["/".join(path.replace(chr(92), "/").split("/")[-2:])] += n
     out += ["", "Most re-read files"]
-    top = [f"{path} x{n}" for path, n in sorted(rereads.items(), key=lambda kv: (-kv[1], kv[0]))[:FILES_MAX]]
-    out.append("  " + ", ".join(top) if top else "  No file was re-read.")
+    top = [f"{path} x{n}" for path, n in sorted(rereads.items(), key=lambda kv: (-kv[1], kv[0])) if n > 1]
+    out.append("  " + ", ".join(top[:FILES_MAX]) if top else "  No file was re-read more than once.")
 
     out += ["", "Lowest runs"]
     ranked = sorted((r for r in runs if _total(r) is not None), key=lambda r: (_total(r), r.get("started_at") or ""))
