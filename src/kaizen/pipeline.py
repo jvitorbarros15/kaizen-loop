@@ -3,6 +3,7 @@ import os
 import sqlite3
 import tempfile
 from dataclasses import asdict, fields
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from kaizen.config import load_config
@@ -13,7 +14,9 @@ from kaizen.record.parse import parse_session
 from kaizen.score import RunStats, baseline_for, compute_score, stats_of
 from kaizen.signals import Signals, extract_signals, strength_of
 from kaizen.store import Store
-from kaizen.tasks import split_tasks, summarise, task_key, task_view
+from kaizen.tasks import TaskSummary, split_tasks, summarise, task_key, task_view
+
+RATING_WINDOW = timedelta(hours=6)
 
 
 def find_transcripts(projects_dir: Path) -> list[Path]:
@@ -172,6 +175,32 @@ def score_task(session_id: str, idx: int, store: Store, config: dict, runner: Ru
     }
     store.save_task_score(task_key(summary), session_id, summary.index, saved)
     return saved
+
+
+def _moment(text) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(text)
+    except (ValueError, TypeError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def task_for_rating(store: Store, rating: dict) -> TaskSummary | None:
+    when = _moment(rating.get("created_at"))
+    if when is None:
+        return None
+    started = []
+    for task in store.list_tasks():
+        begun = _moment(task.started_at)
+        if task.session_id == rating["session_id"] and begun is not None and begun <= when:
+            started.append((begun, task))
+    if not started:
+        return None
+    task = max(started, key=lambda item: (item[0], item[1].index))[1]
+    ended = _moment(task.ended_at)
+    if ended is not None and when - ended > RATING_WINDOW:
+        return None
+    return task
 
 
 def refresh_pr_outcomes(store: Store, runner: Runner = run_subprocess) -> int:

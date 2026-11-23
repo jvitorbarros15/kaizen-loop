@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from kaizen.record.model import RunRecord, Usage
-from kaizen.redact import find_secrets, redact_obj
+from kaizen.redact import find_secrets, redact, redact_obj
 from kaizen.tasks import TaskSummary, summarise, task_key
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE TABLE IF NOT EXISTS task_scores (
     key TEXT PRIMARY KEY, session_id TEXT, idx INTEGER, json TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS ratings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, session_id TEXT, grade REAL, note TEXT
 );
 """
 
@@ -267,6 +270,20 @@ class Store:
                 )
             ]
 
+    def save_rating(self, session_id: str, grade: float, note: str = "", created_at: str | None = None) -> None:
+        with contextlib.closing(self._connect()) as db, db:
+            db.execute(
+                "INSERT INTO ratings (created_at, session_id, grade, note) VALUES (?, ?, ?, ?)",
+                (created_at or _now(), session_id, grade, redact(note)),
+            )
+
+    def list_ratings(self) -> list[dict]:
+        with contextlib.closing(self._connect()) as db, db:
+            rows = db.execute(
+                "SELECT id, created_at, session_id, grade, note FROM ratings ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+        return [dict(zip(("id", "created_at", "session_id", "grade", "note"), row, strict=True)) for row in rows]
+
     def audit(self) -> list[tuple[str, str]]:
         hits = []
         for path in [*self._run_files(), *self._root_files()]:
@@ -274,7 +291,7 @@ class Store:
             hits.extend((path.name, kind) for kind in dict.fromkeys(kinds))
         kinds: set[str] = set()
         with contextlib.closing(self._connect()) as db, db:
-            for table in ("runs", "scores", "human_grades", "tasks", "task_scores"):
+            for table in ("runs", "scores", "human_grades", "tasks", "task_scores", "ratings"):
                 for row in db.execute(f"SELECT * FROM {table}"):
                     for value in row:
                         if isinstance(value, str):
@@ -288,7 +305,7 @@ class Store:
             suspects.extend((path.name, p) for p in _suspect_previews(path.read_text(encoding="utf-8"), []))
         seen: list[str] = []
         with contextlib.closing(self._connect()) as db, db:
-            for table in ("runs", "scores", "human_grades", "tasks", "task_scores"):
+            for table in ("runs", "scores", "human_grades", "tasks", "task_scores", "ratings"):
                 for row in db.execute(f"SELECT * FROM {table}"):
                     for value in row:
                         if isinstance(value, str):
