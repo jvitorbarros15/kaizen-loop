@@ -129,7 +129,6 @@ def test_report_on_hand_built_store(tmp_path):
     assert len(lowest) == 5
     assert re.match(r"3\.0  2026-11-14  api-server\s+waste 4\.0 per 100 calls", lowest[0].strip())
     assert any("tests failed at end" in line for line in lowest)
-    assert '"run the tests before saying done"  x2' in text
 
 
 def test_composite_never_printed_without_baseline(tmp_path):
@@ -148,12 +147,6 @@ def test_last_limits_runs_and_counts_pending(tmp_path, make_session):
     assert "Graded sessions (last 3)\n  1 more session recorded, not scored yet." in text
     by_project = text.split("By project")[1].split("Evidence")[0]
     assert "web-client" in by_project and "api-server" not in by_project
-
-
-def test_no_repeated_corrections(tmp_path):
-    store = Store(tmp_path / "store")
-    store.save_score("a", make_score("p", "2026-11-10", tests="passed", corrections=["only once"]))
-    assert "No correction was repeated" in render_report(store, now=NOW)
 
 
 def test_project_block_shows_pull_request_outcomes():
@@ -386,6 +379,7 @@ def test_task_sections_print_with_nothing_scored(tmp_path):
     assert "Tasks by project" in text
     assert "No session has been graded yet. Run kaizen score --pending." in text
     assert "Graded sessions" not in text
+    assert "Corrections are extracted when sessions are graded. Run kaizen score --pending." in text
 
 
 def test_graded_sessions_follow_the_task_sections(tmp_path):
@@ -396,6 +390,59 @@ def test_graded_sessions_follow_the_task_sections(tmp_path):
     assert "No session has been graded yet" not in text
     for heading in ("Evidence", "Most re-read files", "Lowest runs"):
         assert heading in text
+
+
+def group_text(tmp_path, groups):
+    from kaizen.corrections import Group
+
+    return render_report(
+        hand_built_store(tmp_path),
+        now=NOW,
+        groups=groups if groups is None else ([Group(**g) for g in groups[0]], groups[1]),
+    )
+
+
+def test_corrections_section_with_groups(tmp_path):
+    first = {
+        "label": "runs no tests before saying the work is done",
+        "count": 5,
+        "sessions": 3,
+        "examples": ["you did not run the tests", "run pytest first"],
+    }
+    second = {"label": "commits files it was told to leave out", "count": 3, "sessions": 2, "examples": []}
+    text = group_text(tmp_path, ([first, second], "model"))
+    section = text.split("What you keep correcting")[1].split("\n\n")[0]
+    assert section.startswith(" (grouped by meaning, from 11 graded sessions)")
+    lines = section.splitlines()
+    assert lines[1] == "   5x in 3 sessions   runs no tests before saying the work is done"
+    assert lines[2].strip() == 'e.g. "you did not run the tests"  /  "run pytest first"'
+    assert lines[2].index("e.g.") == lines[1].index("runs no tests")
+    assert lines[3] == "   3x in 2 sessions   commits files it was told to leave out"
+    assert len(lines) == 4
+    assert "exact wording" not in text
+
+
+def test_corrections_section_without_groups(tmp_path):
+    text = group_text(tmp_path, ([], "model"))
+    section = text.split("What you keep correcting")[1].split("\n\n")[0]
+    assert "No correction repeats yet." in section
+    assert "exact wording" not in section
+
+
+def test_corrections_section_flags_exact_matching(tmp_path):
+    for path in ("exact", "exact (model call failed)"):
+        section = group_text(tmp_path / path.split()[0], ([], path)).split("What you keep correcting")[1].split("\n\n")[0]
+        assert "No correction repeats yet." in section
+        assert "exact wording" in section
+    grouped = {"label": "same words again", "count": 2, "sessions": 2, "examples": ["same words again"]}
+    section = group_text(tmp_path / "g", ([grouped], "exact")).split("What you keep correcting")[1].split("\n\n")[0]
+    assert "2x in 2 sessions   same words again" in section and "exact wording" in section
+
+
+def test_corrections_section_when_nothing_is_scored(tmp_path):
+    text = render_report(task_store(tmp_path), now=NOW, groups=([], "model"))
+    assert "Corrections are extracted when sessions are graded. Run kaizen score --pending." in text
+    assert "What you keep correcting" not in text
 
 
 def test_colour_on_and_off(tmp_path, monkeypatch):

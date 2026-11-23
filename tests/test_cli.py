@@ -150,6 +150,60 @@ def test_report_leads_with_tasks_inside_the_day_window(home, tmp_path, make_sess
     assert "(2 tasks in 2 sessions)" in capsys.readouterr().out
 
 
+def save_corrected_scores(wording):
+    store = Store()
+    for i, text in enumerate(wording):
+        store.save_score(
+            f"s{i}",
+            {
+                "score": {"baseline": "insufficient", "evidence": "none", "total": None},
+                "signals": {"corrections": [text]},
+                "verdict": {},
+                "stats": {},
+                "corrections_known": True,
+                "repo": "app",
+                "started_at": f"2026-11-0{i + 1}T10:00:00Z",
+            },
+        )
+
+
+def refuse(argv, stdin=None):
+    raise AssertionError("model called")
+
+
+def test_report_no_model_calls_no_runner_and_matches_exactly(home, capsys, monkeypatch):
+    save_corrected_scores(["Run the tests first", "run the tests first "])
+    monkeypatch.setattr(cli, "RUNNER", refuse)
+    assert main(["report", "--no-model"]) == 0
+    out = capsys.readouterr().out
+    assert "2x in 2 sessions   run the tests first" in out and "exact wording" in out
+
+
+def test_report_with_corrections_disabled_calls_no_runner(home, capsys, monkeypatch):
+    save_corrected_scores(["Run the tests first", "run the tests first"])
+    (home / "config.toml").write_text("[corrections]\nenabled = false\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "RUNNER", refuse)
+    assert main(["report"]) == 0
+    assert "What you keep correcting" in capsys.readouterr().out
+
+
+def test_report_groups_corrections_with_one_model_call(home, capsys, monkeypatch):
+    save_corrected_scores(["run the tests first", "you did not run the tests", "use tabs"])
+    calls = []
+    answer = json.dumps([{"label": "skips the tests", "members": [1, 2]}])
+
+    def runner(argv, stdin=None):
+        calls.append(stdin)
+        return 0, json.dumps({"result": answer})
+
+    monkeypatch.setattr(cli, "RUNNER", runner)
+    assert main(["report"]) == 0
+    out = capsys.readouterr().out
+    assert "2x in 2 sessions   skips the tests" in out and "exact wording" not in out
+    assert main(["report"]) == 0
+    assert len(calls) == 1
+
+
 def test_calibrate_saves_blind_grades(home, tmp_path, capsys, monkeypatch, make_session):
     store = Store()
     monkeypatch.setattr(cli, "now", lambda: datetime(2026, 11, 23, 12, 0, tzinfo=UTC))

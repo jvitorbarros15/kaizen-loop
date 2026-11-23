@@ -2,6 +2,7 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 from statistics import mean, median
 
+from kaizen.corrections import Group
 from kaizen.pipeline import scored_runs
 from kaizen.score import MIN_RUNS
 from kaizen.store import Store
@@ -14,6 +15,11 @@ NO_PROJECT = "(no project)"
 TASK_LINE_MAX = 110
 UNCHECKED_SHOWN = 8
 FAILED_SHOWN = 5
+EXACT_NOTES = {
+    "exact": "the model was not used",
+    "exact (model call failed)": "the model call failed",
+}
+EXAMPLE_MAX = 70
 CHECK_NOTE = (
     "This counts tests, type checks, linters and builds the tool recognises; "
     "checking by eye in a browser is not seen."
@@ -292,14 +298,36 @@ def _graded_sections(runs: list[dict], pending: int) -> list[str]:
     if not ranked:
         out.append("  No run has a composite score yet.")
 
-    counts = Counter(c.strip().lower() for r in runs for c in _signals(r).get("corrections") or [] if c.strip())
-    out += ["", "Repeated corrections (all runs, weak ones included)"]
-    repeated = sorted(((c, n) for c, n in counts.items() if n >= 2), key=lambda kv: (-kv[1], kv[0]))
-    out += [f'  "{c}"  x{n}' for c, n in repeated] or ["  No correction was repeated in these runs."]
     return out
 
 
-def render_report(store: Store, last: int = 20, days: int = 14, now: datetime | None = None) -> str:
+def _correction_lines(groups: tuple[list[Group], str], graded: int) -> list[str]:
+    found, path = groups
+    out = [_heading(f"What you keep correcting (grouped by meaning, from {_plural(graded, 'graded session')})")]
+    rows = [f"  {g.count:>2}x in {_plural(g.sessions, 'session')}" for g in found]
+    width = max((len(r) for r in rows), default=0) + 3
+    for row, g in zip(rows, found, strict=True):
+        out.append(f"{row:<{width}}{g.label}")
+        if g.examples:
+            quoted = [f'"{e if len(e) <= EXAMPLE_MAX else e[: EXAMPLE_MAX - 3].rstrip() + "..."}"' for e in g.examples]
+            out.append(" " * width + "e.g. " + "  /  ".join(quoted))
+    if not found:
+        out.append("  No correction repeats yet.")
+    if path in EXACT_NOTES:
+        out.append(
+            f"  Matched on exact wording only ({EXACT_NOTES[path]}), so corrections worded differently "
+            "are not grouped together."
+        )
+    return out
+
+
+def render_report(
+    store: Store,
+    last: int = 20,
+    days: int = 14,
+    groups: tuple[list[Group], str] | None = None,
+    now: datetime | None = None,
+) -> str:
     pending = len(store.pending_scores())
     scored = scored_runs(store)
     if not scored and not pending:
@@ -308,7 +336,11 @@ def render_report(store: Store, last: int = 20, days: int = 14, now: datetime | 
     runs = [score for _, score in scored[:last]]
     out.append("")
     if runs:
-        out += _graded_sections(runs, pending)
+        out += _correction_lines(groups or ([], "model"), len(runs)) + [""] + _graded_sections(runs, pending)
     else:
-        out.append("No session has been graded yet. Run kaizen score --pending.")
+        out += [
+            "Corrections are extracted when sessions are graded. Run kaizen score --pending.",
+            "",
+            "No session has been graded yet. Run kaizen score --pending.",
+        ]
     return "\n".join(out)
