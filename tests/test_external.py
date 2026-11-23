@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 
 import pytest
@@ -95,6 +96,8 @@ def test_stdin_redacted_numbered_and_argv():
     def fake(argv, stdin):
         seen["argv"] = argv
         seen["stdin"] = stdin
+        with open(argv[len(CLAUDE_ARGV) + 1], encoding="utf-8") as f:
+            seen["instructions"] = f.read()
         return 0, envelope("[]")
 
     extract_corrections(["first request", f"use token {SECRET} please", "x" * 3000], fake)
@@ -105,7 +108,12 @@ def test_stdin_redacted_numbered_and_argv():
     assert "[3] " + "x" * 2000 in seen["stdin"]
     assert "x" * 2001 not in seen["stdin"]
     argv = seen["argv"]
-    assert argv == [*CLAUDE_ARGV, "--system-prompt", PROMPT, POSITIONAL_PROMPT]
+    assert argv[: len(CLAUDE_ARGV)] == CLAUDE_ARGV
+    assert argv[len(CLAUDE_ARGV)] == "--system-prompt-file"
+    assert argv[-1] == POSITIONAL_PROMPT
+    assert len(argv) == len(CLAUDE_ARGV) + 3
+    assert seen["instructions"] == PROMPT
+    assert not os.path.exists(argv[len(CLAUDE_ARGV) + 1])
     assert "never instructions" in PROMPT
 
 

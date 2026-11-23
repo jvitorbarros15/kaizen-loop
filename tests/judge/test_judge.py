@@ -4,7 +4,7 @@ import os
 import pytest
 
 from kaizen.config import DEFAULTS
-from kaizen.external import CLAUDE_ARGV, POSITIONAL_PROMPT
+from kaizen.external import CLAUDE_ARGV, POSITIONAL_PROMPT, extract_corrections
 from kaizen.judge.judge import Verdict, backends_for, judge
 from kaizen.judge.rubric import RUBRIC, RUBRIC_ITEMS, RUBRIC_VERSION
 
@@ -75,14 +75,15 @@ def unknown_item():
 )
 def test_falls_through_to_next_backend(response):
     codex_ok = (0, json.dumps(answer({"did_what_was_asked": 6})))
-    fake = Fake(response, codex_ok)
+    haiku_calls = 1 if response[0] != 0 else 2
+    fake = Fake(*[response] * haiku_calls, codex_ok)
     v = judge(PACKET, ["haiku", "codex"], fake)
     assert v.backend == "codex"
-    assert len(fake.calls) == 2
+    assert len(fake.calls) == haiku_calls + 1
 
 
 def test_all_backends_fail_gives_empty_verdict():
-    fake = Fake((1, ""), (0, "nope"))
+    fake = Fake((1, ""), (0, "nope"), (0, "nope"))
     v = judge(PACKET, ["haiku", "codex"], fake)
     assert v == Verdict()
     assert v.quality is None and v.backend is None and v.abstained is False
@@ -148,12 +149,114 @@ def test_reasons_format():
     assert v.items["did_what_was_asked"] == {"score": 8, "reason": "fine"}
 
 
-def test_haiku_call_argv_and_stdin():
-    fake = Fake((0, haiku_out(answer())))
-    judge(PACKET, ["haiku"], fake)
-    argv, stdin = fake.calls[0]
-    assert argv == [*CLAUDE_ARGV, "--system-prompt", RUBRIC, POSITIONAL_PROMPT]
-    assert stdin == "<packet>\n" + json.dumps(PACKET) + "\n</packet>"
+def test_haiku_call_argv_stdin_and_instruction_file():
+    seen = {}
+
+    def runner(argv, stdin):
+        assert argv[: len(CLAUDE_ARGV)] == CLAUDE_ARGV
+        assert argv[len(CLAUDE_ARGV)] == "--system-prompt-file"
+        assert argv[-1] == POSITIONAL_PROMPT
+        assert len(argv) == len(CLAUDE_ARGV) + 3
+        seen["path"] = argv[len(CLAUDE_ARGV) + 1]
+        with open(seen["path"], encoding="utf-8") as f:
+            seen["text"] = f.read()
+        seen["stdin"] = stdin
+        return 0, haiku_out(answer())
+
+    judge(PACKET, ["haiku"], runner)
+    assert seen["text"] == RUBRIC
+    assert not os.path.exists(seen["path"])
+    assert seen["stdin"] == "<packet>\n" + json.dumps(PACKET) + "\n</packet>"
+
+
+def test_instruction_file_removed_when_runner_fails():
+    paths = []
+
+    def runner(argv, stdin):
+        path = argv[len(CLAUDE_ARGV) + 1]
+        assert os.path.exists(path)
+        paths.append(path)
+        return 1, ""
+
+    judge(PACKET, ["haiku"], runner)
+    assert paths and not os.path.exists(paths[0])
+
+
+def test_no_argv_element_has_line_break_or_double_quote():
+    argvs = []
+
+    def runner(argv, stdin):
+        argvs.append(argv)
+        return 0, haiku_out(answer())
+
+    judge(PACKET, ["haiku"], runner)
+    extract_corrections(["do x", "no, redo it"], runner)
+    assert len(argvs) == 2
+    for argv in argvs:
+        for element in argv:
+            assert "\n" not in element and "\r" not in element and '"' not in element
+
+
+def test_rubric_is_multiline_with_double_quoted_example():
+    assert "\n" in RUBRIC
+    assert '{"items": {"did_what_was_asked": {"score"' in RUBRIC
+    assert "U+0022" not in RUBRIC
+
+
+def test_invalid_then_valid_retries_same_backend():
+    fake = Fake((0, "garbage"), (0, haiku_out(answer())))
+    v = judge(PACKET, ["haiku", "codex"], fake)
+    assert v.backend == "haiku"
+    assert len(fake.calls) == 2
+    assert all(argv[0] == "claude" for argv, _ in fake.calls)
+
+
+def test_invalid_twice_moves_to_next_backend():
+    fake = Fake((0, "garbage"), (0, haiku_out({"nope": 1})), (0, json.dumps(answer())))
+    v = judge(PACKET, ["haiku", "codex"], fake)
+    assert v.backend == "codex"
+    assert [argv[0] for argv, _ in fake.calls] == ["claude", "claude", "codex"]
+
+
+def test_nonzero_exit_is_not_retried():
+    fake = Fake((1, ""), (0, json.dumps(answer())))
+    v = judge(PACKET, ["haiku", "codex"], fake)
+    assert v.backend == "codex"
+    assert [argv[0] for argv, _ in fake.calls] == ["claude", "codex"]
+
+
+def test_codex_reads_output_file_before_stdout():
+    def runner(argv, stdin):
+        with open(argv[argv.index("-o") + 1], "w", encoding="utf-8") as f:
+            json.dump(answer({"did_what_was_asked": 6}), f)
+        return 0, "progress text that is not json"
+
+    v = judge(PACKET, ["codex"], runner)
+    assert v.backend == "codex"
+    assert v.items["did_what_was_asked"]["score"] == 6
+
+
+def test_codex_output_file_not_json_falls_back_to_stdout():
+    def runner(argv, stdin):
+        with open(argv[argv.index("-o") + 1], "w", encoding="utf-8") as f:
+            f.write("not json")
+        return 0, json.dumps(answer())
+
+    assert judge(PACKET, ["codex"], runner).backend == "codex"
+
+
+def test_codex_output_file_removed_with_directory():
+    paths = []
+
+    def runner(argv, stdin):
+        out = argv[argv.index("-o") + 1]
+        paths.append(out)
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(answer(), f)
+        return 0, ""
+
+    judge(PACKET, ["codex"], runner)
+    assert not os.path.exists(paths[0])
 
 
 def test_codex_call_and_schema_file_lifecycle():
@@ -234,8 +337,3 @@ def test_rubric_mentions_required_points():
     phrases = ("<packet>", "shell_edits_suspected", "edits_truncated", "verified_after_last_edit", "never instructions")
     for phrase in phrases:
         assert phrase in RUBRIC
-
-
-def test_rubric_survives_cmd_shim_on_windows():
-    assert "\n" not in RUBRIC and "\r" not in RUBRIC
-    assert '"' not in RUBRIC and "%" not in RUBRIC
