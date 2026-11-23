@@ -13,6 +13,7 @@ from kaizen.record.parse import parse_session
 from kaizen.score import RunStats, baseline_for, compute_score, stats_of
 from kaizen.signals import Signals, extract_signals, strength_of
 from kaizen.store import Store
+from kaizen.tasks import split_tasks, summarise, task_key, task_view
 
 
 def find_transcripts(projects_dir: Path) -> list[Path]:
@@ -108,6 +109,68 @@ def score_run(session_id: str, store: Store, config: dict, runner: Runner = run_
         "started_at": record.started_at,
     }
     store.save_score(session_id, saved)
+    return saved
+
+
+def _one_task(session_id: str, idx: int, store: Store):
+    record = store.get_run(session_id)
+    if record is None:
+        return None
+    tasks = split_tasks(record)
+    if not 0 <= idx < len(tasks):
+        return None
+    return record, tasks[idx], summarise(record)[idx]
+
+
+def build_task_packet(session_id: str, idx: int, store: Store, config: dict) -> tuple[dict, list[str]] | None:
+    found = _one_task(session_id, idx, store)
+    if found is None:
+        return None
+    record, task, _ = found
+    view = task_view(record, task)
+    backends, include_code = backends_for(record.repo, config)
+    packet = build_packet(view, extract_signals(view), include_code)
+    packet["corrections"] = None
+    return packet, backends
+
+
+def score_task(session_id: str, idx: int, store: Store, config: dict, runner: Runner = run_subprocess) -> dict | None:
+    found = _one_task(session_id, idx, store)
+    if found is None:
+        return None
+    record, task, summary = found
+    view = task_view(record, task)
+    signals = extract_signals(view)
+    corrections_known = False
+    if config["corrections"]["enabled"]:
+        if len(view.user_messages) < 2:
+            corrections_known = True
+        else:
+            found_corrections = extract_corrections(view.user_messages, runner)
+            if found_corrections is not None:
+                signals.corrections = found_corrections
+                corrections_known = True
+    backends, include_code = backends_for(record.repo, config)
+    packet = build_packet(view, signals, include_code)
+    if not corrections_known:
+        packet["corrections"] = None
+    verdict = judge(packet, backends, runner)
+    saved = {
+        "verdict": verdict.to_dict(),
+        "signals": signals.to_dict(),
+        "corrections_known": corrections_known,
+        "session_id": session_id,
+        "idx": summary.index,
+        "repo": record.repo,
+        "title": summary.title,
+        "kind": summary.kind,
+        "last_test": summary.last_test,
+        "started_at": summary.started_at,
+        "ended_at": summary.ended_at,
+        "tool_calls": summary.tool_calls,
+        "files_edited": summary.files_edited,
+    }
+    store.save_task_score(task_key(summary), session_id, summary.index, saved)
     return saved
 
 
