@@ -21,6 +21,7 @@ from kaizen.pipeline import (
     score_run,
     scored_runs,
 )
+from kaizen.redact import redact
 from kaizen.report import calibration_summary, render_report
 from kaizen.store import Store, kaizen_home
 
@@ -64,7 +65,7 @@ def paint(text: str, style: str) -> str:
 
 def log_hook(error: str, message: str) -> None:
     with contextlib.suppress(Exception):
-        text = " ".join(str(message).split())[:200]
+        text = " ".join(redact(str(message)).split())[:200]
         line = f"{datetime.now(UTC).isoformat()} {error} {text}\n"
         with open(kaizen_home() / "hook.log", "a", encoding="utf-8") as f:
             f.write(line)
@@ -72,10 +73,12 @@ def log_hook(error: str, message: str) -> None:
 
 def cmd_record(args) -> int:
     try:
-        session_id = record_session(Path(args.transcript), Store())
+        session_id = record_session(Path(args.transcript), Store(), skip_temp=args.skip_temp)
     except Exception as exc:
         log_hook(type(exc).__name__, f"record failed: {exc}")
         return 1
+    if session_id is None:
+        return 0
     say(f"{session_id} recorded")
     return 0
 
@@ -105,7 +108,7 @@ def hook_session_end(stdin, spawn: Callable[..., object] = subprocess.Popen) -> 
             log_hook("MissingTranscript", "transcript file does not exist")
             return 0
         spawn(
-            [sys.executable, "-m", "kaizen.cli", "record", "--transcript", path],
+            [sys.executable, "-m", "kaizen.cli", "record", "--transcript", path, "--skip-temp"],
             **detached_options(),
         )
     except Exception as exc:
@@ -358,6 +361,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("record", help="record one transcript")
     p.add_argument("--transcript", required=True)
+    p.add_argument("--skip-temp", action="store_true")
     p.set_defaults(func=cmd_record)
 
     p = sub.add_parser("hook", help="entry points for Claude Code hooks")

@@ -5,7 +5,7 @@ import pytest
 
 @pytest.fixture
 def make_session():
-    def make(directory, session_id, cwd="/home/dev/api-server", calls=2, started="2026-01-01", pr_url=None, prompts=None):
+    def make(directory, session_id, cwd="/home/dev/api-server", calls=2, started="2026-01-01", pr_url=None, prompts=None, edits=False):
         def entry(kind, content, n, **extra):
             return {
                 "type": kind,
@@ -25,6 +25,11 @@ def make_session():
             result = {"type": "tool_result", "tool_use_id": f"toolu_{n}", "content": "ok"}
             lines.append(entry("user", [result], n + 1))
             n += 2
+        if edits:
+            edit = {"file_path": f"{cwd}/changed.py", "old_string": "a", "new_string": "b"}
+            block = {"type": "tool_use", "id": f"toolu_{n}", "name": "Edit", "input": edit}
+            lines.append(entry("assistant", [block], n, usage={"input_tokens": 100, "output_tokens": 10}))
+            lines.append(entry("user", [{"type": "tool_result", "tool_use_id": f"toolu_{n}", "content": "ok"}], n + 1))
         if pr_url:
             lines.append({"type": "pr-link", "sessionId": session_id, "prUrl": pr_url})
         directory.mkdir(parents=True, exist_ok=True)
