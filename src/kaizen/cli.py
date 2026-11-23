@@ -26,7 +26,7 @@ from kaizen.pipeline import (
     scored_runs,
 )
 from kaizen.redact import redact
-from kaizen.report import calibration_summary, render_report
+from kaizen.report import calibration_summary, render_check, render_report
 from kaizen.store import Store, kaizen_home
 from kaizen.tasks import TITLE_MAX
 
@@ -464,6 +464,11 @@ def cmd_calibrate(args) -> int:
     return 0
 
 
+def cmd_check_judge(args) -> int:
+    say(render_check(Store()))
+    return 0
+
+
 def cmd_audit(args) -> int:
     store = Store()
     hits = store.audit()
@@ -528,6 +533,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--session")
     p.add_argument("--projects-dir", default=str(Path.home() / ".claude" / "projects"))
     p.set_defaults(func=cmd_rate)
+
+    p = sub.add_parser("check-judge", help="check the judge against your ratings and the recorded evidence")
+    p.set_defaults(func=cmd_check_judge)
 
     p = sub.add_parser("audit", help="look for secrets in the store")
     p.set_defaults(func=cmd_audit)
