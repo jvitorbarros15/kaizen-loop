@@ -415,10 +415,21 @@ def test_corrections_section_with_groups(tmp_path):
     assert section.startswith(" (grouped by meaning, from 11 graded sessions)")
     lines = section.splitlines()
     assert lines[1] == "   5x in 3 sessions   runs no tests before saying the work is done"
-    assert lines[2].strip() == 'e.g. "you did not run the tests"  /  "run pytest first"'
+    assert lines[2].strip() == 'e.g. "you did not run the tests"'
+    assert lines[3].strip() == 'e.g. "run pytest first"'
     assert lines[2].index("e.g.") == lines[1].index("runs no tests")
-    assert lines[3] == "   3x in 2 sessions   commits files it was told to leave out"
-    assert len(lines) == 4
+    assert lines[4] == "   3x in 2 sessions   commits files it was told to leave out"
+    assert len(lines) == 5
+    assert all(len(line) <= 110 for line in lines)
+
+
+def test_corrections_section_caps_the_number_of_groups(tmp_path):
+    many = [{"label": f"mistake number {n}", "count": 2, "sessions": 1, "examples": ["x" * 300]} for n in range(11)]
+    text = group_text(tmp_path, (many, "model"))
+    section = text.split("What you keep correcting")[1].split("\n\n")[0]
+    assert "mistake number 7" in section and "mistake number 8" not in section
+    assert "... 3 more" in section
+    assert all(len(line) <= 110 for line in section.splitlines())
     assert "exact wording" not in text
 
 
