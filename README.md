@@ -18,7 +18,7 @@
 </p>
 
 > [!WARNING]
-> Nothing is usable yet. Stage 1 is being built. The commands and output shown below describe the design, not a release.
+> Early development. Stage 1 (record, score, report) now runs end to end. Stages 2 and 3 do not exist yet, and the commands for them below describe the design only.
 
 ## Why
 
@@ -45,6 +45,36 @@ flowchart TD
 ```
 
 Every improvement carries a number: score before, score after, cost before, cost after.
+
+## Install
+
+You need Python 3.11 or newer, [uv](https://docs.astral.sh/uv/) and Claude Code.
+
+Install the CLI from a clone:
+
+```bash
+uv tool install .
+```
+
+Load the plugin for one session, which records that session when it ends:
+
+```bash
+claude --plugin-dir ./plugin
+```
+
+To have it on in every session, add the repository as a local marketplace (the plugin needs a `.claude-plugin/marketplace.json` listing `./plugin`), then run `claude plugin marketplace add <dir>` and `claude plugin install kaizen@<marketplace>`. I did not test this persistent route; only `--plugin-dir` has been run.
+
+The hook only starts a background process and returns at once, so it does not slow down closing a session.
+
+First use:
+
+```bash
+kaizen import
+kaizen score --pending
+kaizen report
+```
+
+Recordings stay on your machine with secrets removed. Grading sends a redacted summary to a small model through your own Claude subscription, and to Codex only for repositories you list in `~/.kaizen/config.toml`.
 
 ## Principles
 

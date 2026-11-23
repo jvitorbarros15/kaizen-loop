@@ -1,0 +1,5 @@
+{
+  "name": "kaizen",
+  "description": "Records each Claude Code session to a local store with secrets redacted, so it can be graded and reported.",
+  "version": "0.1.0"
+}
