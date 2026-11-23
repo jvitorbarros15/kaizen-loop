@@ -18,10 +18,10 @@ class Usage:
     @classmethod
     def from_dict(cls, d: dict) -> "Usage":
         return cls(
-            input=d["input"],
-            cache_write=d["cache_write"],
-            cache_read=d["cache_read"],
-            output=d["output"],
+            input=d.get("input", 0),
+            cache_write=d.get("cache_write", 0),
+            cache_read=d.get("cache_read", 0),
+            output=d.get("output", 0),
         )
 
 
@@ -42,14 +42,14 @@ class ToolCall:
     @classmethod
     def from_dict(cls, d: dict) -> "ToolCall":
         return cls(
-            id=d["id"],
-            name=d["name"],
-            input=d["input"],
-            is_error=d["is_error"],
-            output_excerpt=d["output_excerpt"],
-            timestamp=d["timestamp"],
-            exit_code=d["exit_code"],
-            agent_id=d["agent_id"],
+            id=d.get("id", ""),
+            name=d.get("name", ""),
+            input=d.get("input") or {},
+            is_error=d.get("is_error", False),
+            output_excerpt=d.get("output_excerpt", ""),
+            timestamp=d.get("timestamp", ""),
+            exit_code=d.get("exit_code"),
+            agent_id=d.get("agent_id"),
         )
 
 
@@ -72,6 +72,8 @@ class RunRecord:
     parent_session_id: str | None = None
     skipped_lines: int = 0
     interruptions: int = 0
+    final_message: str = ""
+    schema_version: int = 1
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -79,21 +81,23 @@ class RunRecord:
     @classmethod
     def from_dict(cls, d: dict) -> "RunRecord":
         return cls(
-            session_id=d["session_id"],
-            source=d["source"],
-            cwd=d["cwd"],
-            repo=d["repo"],
-            git_branch=d["git_branch"],
-            started_at=d["started_at"],
-            ended_at=d["ended_at"],
-            agent_version=d["agent_version"],
-            usage_by_model={k: Usage.from_dict(v) for k, v in d["usage_by_model"].items()},
-            tool_calls=[ToolCall.from_dict(c) for c in d["tool_calls"]],
-            user_messages=list(d["user_messages"]),
-            skills_used=list(d["skills_used"]),
-            pr_urls=list(d["pr_urls"]),
-            cost_usd=d["cost_usd"],
-            parent_session_id=d["parent_session_id"],
-            skipped_lines=d["skipped_lines"],
-            interruptions=d["interruptions"],
+            session_id=d.get("session_id", ""),
+            source=d.get("source", "claude-code"),
+            cwd=d.get("cwd", ""),
+            repo=d.get("repo"),
+            git_branch=d.get("git_branch"),
+            started_at=d.get("started_at", ""),
+            ended_at=d.get("ended_at", ""),
+            agent_version=d.get("agent_version"),
+            usage_by_model={k: Usage.from_dict(v) for k, v in (d.get("usage_by_model") or {}).items()},
+            tool_calls=[ToolCall.from_dict(c) for c in d.get("tool_calls") or []],
+            user_messages=list(d.get("user_messages") or []),
+            skills_used=list(d.get("skills_used") or []),
+            pr_urls=list(d.get("pr_urls") or []),
+            cost_usd=d.get("cost_usd"),
+            parent_session_id=d.get("parent_session_id"),
+            skipped_lines=d.get("skipped_lines", 0),
+            interruptions=d.get("interruptions", 0),
+            final_message=d.get("final_message", ""),
+            schema_version=d.get("schema_version", 1),
         )

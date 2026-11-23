@@ -3,6 +3,7 @@ import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from kaizen.record.model import RunRecord, ToolCall, Usage
+from kaizen.redact import redact
 
 MAX_TEXT = 2000
 EXIT_CODE = re.compile(r"^Exit code (\d+)")
@@ -20,14 +21,59 @@ HARNESS_TAGS = (
 INTERRUPTED = "[Request interrupted by user"
 
 
+WINDOW = 4096
+SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
+TOOL_INPUT_KEYS = {
+    "Bash": ("command", "description", "run_in_background", "timeout"),
+    "PowerShell": ("command", "description", "run_in_background", "timeout"),
+    "Read": ("file_path", "offset", "limit"),
+    "Edit": ("file_path", "old_string", "new_string", "replace_all"),
+    "Write": ("file_path", "content"),
+    "MultiEdit": ("file_path", "edits"),
+    "NotebookEdit": ("notebook_path", "new_source", "cell_id", "edit_mode"),
+    "Grep": ("pattern", "path", "glob", "type", "output_mode"),
+    "Glob": ("pattern", "path"),
+    "Agent": ("description", "prompt", "subagent_type", "model"),
+    "Task": ("description", "prompt", "subagent_type", "model"),
+    "Skill": ("skill", "args"),
+    "WebFetch": ("url", "prompt"),
+    "WebSearch": ("query",),
+}
+
+
+def _head(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return redact(text[: limit + WINDOW])[:limit]
+
+
+def _tail(text: str, limit: int) -> str:
+    return redact(text[-(limit + WINDOW):])[-limit:]
+
+
+def _excerpt(text: str) -> str:
+    if len(text) <= MAX_TEXT:
+        return text
+    half = MAX_TEXT // 2
+    omitted = len(text) - MAX_TEXT
+    return f"{_head(text, half)}\n[... {omitted} characters omitted ...]\n{_tail(text, half)}"
+
+
 def _cut(value):
     if isinstance(value, str):
-        return value[:MAX_TEXT]
+        return _head(value, MAX_TEXT)
     if isinstance(value, dict):
         return {k: _cut(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_cut(v) for v in value]
     return value
+
+
+def _minimise(name: str, tool_input: dict) -> dict:
+    keep = TOOL_INPUT_KEYS.get(name)
+    if keep is None:
+        return {k: "[OMITTED]" for k in tool_input}
+    return {k: _cut(v) for k, v in tool_input.items() if k in keep}
 
 
 def _int(value) -> int:
@@ -133,6 +179,7 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
     prompts: list[str] = []
     skills: list[str] = []
     prs: list[str] = []
+    final_message = ""
 
     with path.open("r", encoding="utf-8", errors="replace") as fh:
         for n, line in enumerate(fh):
@@ -187,6 +234,16 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
                         ),
                     )
                 if isinstance(content, list):
+                    said = "\n".join(
+                        b["text"]
+                        for b in content
+                        if isinstance(b, dict)
+                        and b.get("type") == "text"
+                        and isinstance(b.get("text"), str)
+                        and b["text"].strip()
+                    )
+                    if said:
+                        final_message = said
                     for block in content:
                         if not isinstance(block, dict) or block.get("type") != "tool_use":
                             continue
@@ -194,10 +251,11 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
                         if not isinstance(tid, str) or tid in by_id:
                             continue
                         tool_input = block.get("input")
+                        name = str(block.get("name") or "")
                         call = ToolCall(
                             id=tid,
-                            name=str(block.get("name") or ""),
-                            input=_cut(tool_input) if isinstance(tool_input, dict) else {},
+                            name=name,
+                            input=_minimise(name, tool_input) if isinstance(tool_input, dict) else {},
                             timestamp=ts,
                             agent_id=agent_id,
                         )
@@ -215,7 +273,8 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
                             continue
                         text = _text(block.get("content"))
                         call.is_error = block.get("is_error") is True
-                        call.output_excerpt = text[:MAX_TEXT]
+                        if call.is_error or call.name in SHELL_TOOLS:
+                            call.output_excerpt = _excerpt(text)
                         if call.is_error:
                             m = EXIT_CODE.match(text)
                             call.exit_code = int(m.group(1)) if m else None
@@ -257,6 +316,7 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
         parent_session_id=None,
         skipped_lines=skipped,
         interruptions=interruptions,
+        final_message=_excerpt(final_message),
     )
 
 
@@ -270,10 +330,22 @@ def parse_session(path: Path) -> RunRecord:
     sub_dir = path.parent / path.stem / "subagents"
     if not sub_dir.is_dir():
         return record
+    keyed = [(call.timestamp, call) for call in record.tool_calls]
     for sub in sorted(sub_dir.glob("agent-*.jsonl")):
         child = _parse(sub, sub.stem[len("agent-"):])
         for model, u in child.usage_by_model.items():
             _add(record.usage_by_model.setdefault(model, Usage()), u)
-        record.tool_calls.extend(child.tool_calls)
+        prev = ""
+        for call in child.tool_calls:
+            prev = call.timestamp or prev
+            keyed.append((prev, call))
         record.skipped_lines += child.skipped_lines
+        record.interruptions += child.interruptions
+        record.pr_urls += [u for u in child.pr_urls if u not in record.pr_urls]
+        record.skills_used += [s for s in child.skills_used if s not in record.skills_used]
+        if child.started_at and (not record.started_at or child.started_at < record.started_at):
+            record.started_at = child.started_at
+        record.ended_at = max(record.ended_at, child.ended_at)
+    keyed.sort(key=lambda pair: pair[0])
+    record.tool_calls = [call for _, call in keyed]
     return record

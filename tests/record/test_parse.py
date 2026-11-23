@@ -67,7 +67,7 @@ def test_basic_metadata():
     assert r.skills_used == []
     assert r.parent_session_id is None
     assert r.user_messages == ["Fix the failing test in src/app.py"]
-    assert r.tool_calls[3].output_excerpt == "The file /home/dev/project/src/app.py has been updated."
+    assert r.tool_calls[3].output_excerpt == ""
     assert r.tool_calls[0].agent_id is None
 
 
@@ -99,15 +99,15 @@ def test_list_form_tool_result_joins_text(tmp_path):
 def test_long_output_and_input_are_cut(tmp_path):
     long = "x" * 5000
     p = write(tmp_path, [
-        assistant("a", [tool_use("t1", inp={"command": long, "n": 3, "nested": {"deep": [long, 7]}})]),
+        assistant("a", [tool_use("t1", inp={"command": long, "timeout": 3, "description": {"deep": [long, 7]}})]),
         result("t1", long),
     ])
     c = parse_transcript(p).tool_calls[0]
-    assert len(c.output_excerpt) == 2000
+    assert c.output_excerpt == "x" * 1000 + "\n[... 3000 characters omitted ...]\n" + "x" * 1000
     assert len(c.input["command"]) == 2000
-    assert c.input["n"] == 3
-    assert len(c.input["nested"]["deep"][0]) == 2000
-    assert c.input["nested"]["deep"][1] == 7
+    assert c.input["timeout"] == 3
+    assert len(c.input["description"]["deep"][0]) == 2000
+    assert c.input["description"]["deep"][1] == 7
 
 
 def test_tool_use_without_result(tmp_path):
@@ -119,12 +119,12 @@ def test_tool_use_without_result(tmp_path):
 
 def test_tool_calls_follow_tool_use_order_not_result_order(tmp_path):
     p = write(tmp_path, [
-        assistant("a", [tool_use("t1", "A"), tool_use("t2", "B")]),
+        assistant("a", [tool_use("t1", "Bash"), tool_use("t2", "PowerShell")]),
         result("t2", "r2"),
         result("t1", "r1"),
     ])
     calls = parse_transcript(p).tool_calls
-    assert [(c.name, c.output_excerpt) for c in calls] == [("A", "r1"), ("B", "r2")]
+    assert [(c.name, c.output_excerpt) for c in calls] == [("Bash", "r1"), ("PowerShell", "r2")]
 
 
 @pytest.mark.parametrize(
@@ -363,3 +363,228 @@ def test_synthetic_model_usage_skipped_but_tool_calls_kept(tmp_path):
     r = parse_transcript(p)
     assert list(r.usage_by_model) == ["m1"]
     assert [c.id for c in r.tool_calls] == ["t1"]
+
+
+TOKEN = "ghp_0123456789abcdefghijABCDEFGHIJ012345"
+
+
+def straddle():
+    return "a" * 1990 + TOKEN + "b" * 3000
+
+
+def test_output_token_across_head_cut_is_redacted(tmp_path):
+    p = write(tmp_path, [
+        assistant("a", [tool_use("t1")]),
+        result("t1", "a" * 990 + TOKEN + "b" * 5000),
+    ])
+    out = parse_transcript(p).tool_calls[0].output_excerpt
+    assert "ghp_" not in out and "0123456789" not in out
+
+
+def test_output_token_across_tail_cut_is_redacted(tmp_path):
+    p = write(tmp_path, [
+        assistant("a", [tool_use("t1")]),
+        result("t1", "a" * 5000 + TOKEN + " " + "b" * 984),
+    ])
+    out = parse_transcript(p).tool_calls[0].output_excerpt
+    assert "ABCDEFGHIJ012345" not in out and "ghp_" not in out
+    assert out.endswith("b" * 984) and "omitted" in out
+
+
+def test_top_level_input_token_across_cut_is_redacted(tmp_path):
+    p = write(tmp_path, [assistant("a", [tool_use("t1", inp={"command": straddle()})])])
+    cmd = parse_transcript(p).tool_calls[0].input["command"]
+    assert len(cmd) <= 2000 and "ghp_" not in cmd and "0123456789" not in cmd
+
+
+def test_nested_input_token_across_cut_is_redacted(tmp_path):
+    p = write(tmp_path, [
+        assistant("a", [tool_use("t1", "MultiEdit", inp={"file_path": "f", "edits": [{"old_string": straddle(), "new_string": "x"}]})])
+    ])
+    old = parse_transcript(p).tool_calls[0].input["edits"][0]["old_string"]
+    assert len(old) <= 2000 and "ghp_" not in old and "0123456789" not in old
+
+
+def test_short_output_kept_whole_and_long_is_head_and_tail(tmp_path):
+    whole = "y" * 2000
+    long = "H" * 1000 + "m" * 3000 + "T" * 1000
+    p = write(tmp_path, [
+        assistant("a", [tool_use("t1"), tool_use("t2")]),
+        result("t1", whole),
+        result("t2", long),
+    ])
+    c1, c2 = parse_transcript(p).tool_calls
+    assert c1.output_excerpt == whole
+    assert c2.output_excerpt == "H" * 1000 + "\n[... 3000 characters omitted ...]\n" + "T" * 1000
+
+
+def test_summary_at_end_of_long_output_survives(tmp_path):
+    p = write(tmp_path, [
+        assistant("a", [tool_use("t1")]),
+        result("t1", "." * 9000 + "\n3 failed, 12 passed"),
+    ])
+    assert parse_transcript(p).tool_calls[0].output_excerpt.endswith("3 failed, 12 passed")
+
+
+def test_excerpt_only_for_shell_or_errors(tmp_path):
+    p = write(tmp_path, [
+        assistant("a", [tool_use("r", "Read"), tool_use("b", "Bash"), tool_use("ps", "PowerShell"),
+                        tool_use("e", "Read"), tool_use("m", "mcp__x__y")]),
+        result("r", "file content"),
+        result("b", "out"),
+        result("ps", "out2"),
+        result("e", "Error: nope", is_error=True),
+        result("m", "mcp out"),
+    ])
+    calls = {c.id: c for c in parse_transcript(p).tool_calls}
+    assert calls["r"].output_excerpt == ""
+    assert calls["b"].output_excerpt == "out"
+    assert calls["ps"].output_excerpt == "out2"
+    assert calls["e"].output_excerpt == "Error: nope"
+    assert calls["m"].output_excerpt == ""
+    assert calls["r"].exit_code == 0
+
+
+def test_exit_code_computed_from_full_text_even_when_excerpt_empty(tmp_path):
+    p = write(tmp_path, [
+        assistant("a", [tool_use("t1", "Read")]),
+        result("t1", "Exit code 4\n" + "z" * 9000, is_error=True),
+    ])
+    assert parse_transcript(p).tool_calls[0].exit_code == 4
+
+
+def test_input_allowlist_drops_unknown_keys(tmp_path):
+    p = write(tmp_path, [
+        assistant("a", [
+            tool_use("t1", "Bash", {"command": "ls", "env": {"K": "v"}, "timeout": 5}),
+            tool_use("t2", "Read", {"file_path": "f", "offset": 1, "extra": "x"}),
+            tool_use("t3", "Skill", {"skill": "s", "args": "a", "other": 1}),
+        ])
+    ])
+    c1, c2, c3 = parse_transcript(p).tool_calls
+    assert c1.input == {"command": "ls", "timeout": 5}
+    assert c2.input == {"file_path": "f", "offset": 1}
+    assert c3.input == {"skill": "s", "args": "a"}
+
+
+def test_unknown_tool_keeps_key_names_only(tmp_path):
+    p = write(tmp_path, [
+        assistant("a", [tool_use("t1", "mcp__srv__do", {"token": "secret", "n": 3, "o": {"a": 1}})])
+    ])
+    assert parse_transcript(p).tool_calls[0].input == {"token": "[OMITTED]", "n": "[OMITTED]", "o": "[OMITTED]"}
+
+
+def sub_session(tmp_path, parent_lines, sub_lines):
+    parent = write(tmp_path, parent_lines, "sess.jsonl")
+    d = tmp_path / "sess" / "subagents"
+    d.mkdir(parents=True)
+    (d / "agent-abc.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in sub_lines) + "\n", encoding="utf-8"
+    )
+    return parent
+
+
+def test_subagent_calls_merge_in_time_order(tmp_path):
+    p = sub_session(
+        tmp_path,
+        [
+            assistant("p1", [tool_use("tp", "Bash", {"command": "pytest"})], timestamp="2026-01-01T10:05:00Z"),
+            result("tp", "ok"),
+        ],
+        [
+            assistant("s1", [tool_use("ts", "Bash", {"command": "pytest"})], timestamp="2026-01-01T10:01:00Z"),
+            result("ts", "Exit code 1\nfail", is_error=True),
+        ],
+    )
+    calls = parse_session(p).tool_calls
+    assert [c.id for c in calls] == ["ts", "tp"]
+    assert calls[-1].exit_code == 0
+
+
+def test_empty_timestamp_sorts_with_previous_call_in_own_file(tmp_path):
+    p = sub_session(
+        tmp_path,
+        [assistant("p1", [tool_use("tp")], timestamp="2026-01-01T10:05:00Z")],
+        [
+            assistant("s1", [tool_use("s_a")], timestamp="2026-01-01T10:01:00Z"),
+            assistant("s2", [tool_use("s_b")]),
+            assistant("s3", [tool_use("s_c")], timestamp="2026-01-01T10:09:00Z"),
+        ],
+    )
+    assert [c.id for c in parse_session(p).tool_calls] == ["s_a", "s_b", "tp", "s_c"]
+
+
+def test_subagent_metadata_folds_into_parent(tmp_path):
+    p = sub_session(
+        tmp_path,
+        [
+            {"type": "pr-link", "prUrl": "u1", "timestamp": "2026-01-01T10:05:00Z"},
+            {"type": "assistant", "attributionSkill": "s1", "message": {}, "timestamp": "2026-01-01T10:06:00Z"},
+            {"type": "cost-state", "totalCostUSD": 1.5},
+            {"type": "user", "message": {"content": "hi"}},
+        ],
+        [
+            {"type": "pr-link", "prUrl": "u1", "timestamp": "2026-01-01T10:00:00Z"},
+            {"type": "pr-link", "prUrl": "u2", "timestamp": "2026-01-01T10:00:01Z"},
+            {"type": "assistant", "attributionSkill": "s2", "message": {}, "timestamp": "2026-01-01T10:09:00Z"},
+            {"type": "assistant", "attributionSkill": "s1", "message": {}},
+            {"type": "user", "message": {"content": "[Request interrupted by user]"}},
+            {"type": "user", "message": {"content": "sub prompt"}},
+        ],
+    )
+    r = parse_session(p)
+    assert r.pr_urls == ["u1", "u2"]
+    assert r.skills_used == ["s1", "s2"]
+    assert r.interruptions == 1
+    assert r.started_at == "2026-01-01T10:00:00Z" and r.ended_at == "2026-01-01T10:09:00Z"
+    assert r.cost_usd == 1.5
+    assert r.user_messages == ["hi"]
+
+
+def test_from_dict_tolerates_missing_and_unknown_fields():
+    r = RunRecord.from_dict({})
+    assert r.session_id == "" and r.schema_version == 1 and r.tool_calls == []
+    full = parse_transcript(FIX / "session_basic.jsonl").to_dict()
+    old = {k: v for k, v in full.items() if k not in ("schema_version", "final_message", "usage_by_model")}
+    old["future_field"] = 1
+    old["tool_calls"] = [{"id": "x", "name": "Bash", "new": 1}]
+    got = RunRecord.from_dict(old)
+    assert got.tool_calls[0].input == {} and got.usage_by_model == {}
+
+
+def test_schema_version_in_dict():
+    assert parse_transcript(FIX / "session_basic.jsonl").to_dict()["schema_version"] == 1
+
+
+def text_block(t):
+    return {"type": "text", "text": t}
+
+
+def test_final_message_is_last_assistant_text(tmp_path):
+    p = write(tmp_path, [
+        assistant("a", [text_block("first")]),
+        assistant("b", [text_block("part one"), tool_use("t1"), text_block("part two")]),
+        assistant("c", [tool_use("t2")]),
+        assistant("d", [text_block("")]),
+    ])
+    assert parse_transcript(p).final_message == "part one\npart two"
+
+
+def test_final_message_empty_without_text(tmp_path):
+    p = write(tmp_path, [assistant("a", [tool_use("t1")])])
+    assert parse_transcript(p).final_message == ""
+
+
+def test_final_message_head_and_tail_and_redacted(tmp_path):
+    p = write(tmp_path, [assistant("a", [text_block("a" * 995 + TOKEN + " " + "b" * 3000 + "END")])])
+    m = parse_transcript(p).final_message
+    assert "omitted" in m and m.endswith("END") and "ghp_" not in m
+
+
+def test_subagent_final_message_does_not_contribute(tmp_path):
+    p = sub_session(
+        tmp_path,
+        [assistant("p", [text_block("parent done")], timestamp="2026-01-01T10:00:00Z")],
+        [assistant("s", [text_block("sub done")], timestamp="2026-01-01T10:09:00Z")],
+    )
+    assert parse_session(p).final_message == "parent done"
