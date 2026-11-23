@@ -2,6 +2,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -120,8 +121,67 @@ def hook_session_end(stdin, spawn: Callable[..., object] = subprocess.Popen) -> 
     return 0
 
 
+GRADE = r"\d+(?:[.,]\d+)?"
+_BARE_GRADE = re.compile(GRADE)
+_RATING_PROMPT = re.compile(rf"kz\s+({GRADE})(?:\s+(.*))?", re.IGNORECASE | re.DOTALL)
+
+
+def _grade(text: str) -> float | None:
+    if not _BARE_GRADE.fullmatch(text):
+        return None
+    value = float(text.replace(",", "."))
+    return value if 0 <= value <= 10 else None
+
+
+def hook_prompt(stdin) -> int:
+    try:
+        if os.environ.get("KAIZEN_INTERNAL"):
+            return 0
+        try:
+            payload = json.loads(stdin.read())
+        except ValueError as exc:
+            log_hook(type(exc).__name__, f"hook input is not JSON: {exc}")
+            return 0
+        prompt = payload.get("prompt") if isinstance(payload, dict) else None
+        match = _RATING_PROMPT.fullmatch(prompt.strip()) if isinstance(prompt, str) else None
+        grade = _grade(match.group(1)) if match else None
+        if match is None or grade is None:
+            return 0
+        session_id = payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            log_hook("BadPayload", "no session_id string in hook input")
+            return 0
+        Store().save_rating(session_id, grade, (match.group(2) or "").strip(), now().isoformat())
+        say(json.dumps({"decision": "block", "reason": f"kaizen: rated {grade:g}"}))
+    except Exception as exc:
+        log_hook(type(exc).__name__, str(exc))
+    return 0
+
+
 def cmd_hook(args) -> int:
+    if args.event == "prompt":
+        return hook_prompt(sys.stdin)
     return hook_session_end(sys.stdin)
+
+
+def cmd_rate(args) -> int:
+    grade = _grade(args.grade)
+    if grade is None:
+        say("The grade must be a number from 0 to 10, for example 7 or 7.5")
+        return 2
+    session_id = args.session
+    if session_id is None:
+        found = find_transcripts(Path(args.projects_dir))
+        if not found:
+            say("No Claude Code session found; pass --session ID")
+            return 1
+        session_id = found[0].stem
+    store = Store()
+    moment = now()
+    store.save_rating(session_id, grade, " ".join(args.note), moment.isoformat())
+    run = store.get_run(session_id)
+    say(f"Rated {grade:g} for {(run.repo if run else None) or session_id} at {_clock(moment)}")
+    return 0
 
 
 def cmd_import(args) -> int:
@@ -430,7 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_record)
 
     p = sub.add_parser("hook", help="entry points for Claude Code hooks")
-    p.add_argument("event", choices=["session-end"])
+    p.add_argument("event", choices=["session-end", "prompt"])
     p.set_defaults(func=cmd_hook)
 
     p = sub.add_parser("import", help="record every transcript under the projects directory")
@@ -461,6 +521,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--n", type=int, default=10)
     p.add_argument("--hours", type=float, default=24)
     p.set_defaults(func=cmd_calibrate)
+
+    p = sub.add_parser("rate", help="rate the task you are working on, from 0 to 10")
+    p.add_argument("grade")
+    p.add_argument("note", nargs="*")
+    p.add_argument("--session")
+    p.add_argument("--projects-dir", default=str(Path.home() / ".claude" / "projects"))
+    p.set_defaults(func=cmd_rate)
 
     p = sub.add_parser("audit", help="look for secrets in the store")
     p.set_defaults(func=cmd_audit)

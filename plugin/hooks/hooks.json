@@ -6,6 +6,16 @@
           { "type": "command", "command": "kaizen hook session-end" }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "p=$(cat); r='\"prompt\"[[:space:]]*:[[:space:]]*\"([[:space:]]|[\\\\][nrt])*[kK][zZ]'; if [[ $p =~ $r ]]; then printf '%s' \"$p\" | kaizen hook prompt; fi; exit 0"
+          }
+        ]
+      }
     ]
   }
 }
