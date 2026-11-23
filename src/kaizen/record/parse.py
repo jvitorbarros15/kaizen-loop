@@ -72,7 +72,7 @@ def _cut(value):
 def _minimise(name: str, tool_input: dict) -> dict:
     keep = TOOL_INPUT_KEYS.get(name)
     if keep is None:
-        return {k: "[OMITTED]" for k in tool_input}
+        return dict.fromkeys(tool_input, "[OMITTED]")
     return {k: _cut(v) for k, v in tool_input.items() if k in keep}
 
 
@@ -182,8 +182,8 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
     final_message = ""
 
     with path.open("r", encoding="utf-8", errors="replace") as fh:
-        for n, line in enumerate(fh):
-            line = line.strip()
+        for n, raw in enumerate(fh):
+            line = raw.strip()
             if not line:
                 continue
             try:

@@ -35,13 +35,16 @@ def blob(root):
 
 def test_no_secret_reaches_disk(tmp_path):
     rec = make_record(output_excerpt="token ghp_0123456789abcdefghijABCDEFGHIJ012345")
-    s = Store(tmp_path); s.save_run(rec)
+    s = Store(tmp_path)
+    s.save_run(rec)
     blob = b"".join(p.read_bytes() for p in tmp_path.rglob("*") if p.is_file())
     assert b"ghp_0123456789" not in blob
     assert s.audit() == []
 
 def test_save_twice_is_one_run(tmp_path):
-    s = Store(tmp_path); s.save_run(make_record()); s.save_run(make_record())
+    s = Store(tmp_path)
+    s.save_run(make_record())
+    s.save_run(make_record())
     assert len(s.list_runs()) == 1
 
 
