@@ -5,7 +5,13 @@ import pytest
 
 from kaizen.record.model import RunRecord, ToolCall, Usage
 from kaizen.record.parse import parse_transcript
-from kaizen.signals import Signals, TestRun, extract_signals, strength_of
+from kaizen.signals import (
+    Signals,
+    TestRun,
+    extract_signals,
+    split_segments,
+    strength_of,
+)
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -291,3 +297,282 @@ def test_large_record_is_fast():
     s = sig(*calls)
     assert time.perf_counter() - t < 1.0
     assert s.test_runs
+
+
+def run_of(cmd, output="", **kw):
+    c = call("Bash", command=cmd, **kw)
+    c.output_excerpt = output
+    return sig(c)
+
+
+def test_split_segments_reports_separators():
+    assert split_segments("a && b | c; d || e\nf") == [
+        ("a ", "&&"),
+        (" b ", "|"),
+        (" c", ";"),
+        (" d ", "||"),
+        (" e", "\n"),
+        ("f", ""),
+    ]
+    assert split_segments("echo 'a | b'") == [("echo 'a | b'", "")]
+
+
+def test_piped_test_failure_read_from_output():
+    s = run_of("pytest -q 2>&1 | tail -5", "FAILED tests/a.py::t\n1 failed, 3 passed in 0.2s", exit_code=0)
+    assert [t.passed for t in s.test_runs] == [False]
+    assert s.tests_passed_last is False
+
+
+def test_piped_test_pass_read_from_output():
+    assert run_of("pytest -q 2>&1 | tail -5", "4 passed in 0.2s", exit_code=0).tests_passed_last is True
+
+
+def test_piped_test_unknown_gives_none():
+    s = run_of("pytest -q | tail -5", "some output", exit_code=0)
+    assert len(s.test_runs) == 1
+    assert s.tests_passed_last is None
+
+
+def test_piped_nonzero_exit_does_not_force_failure():
+    assert run_of("pytest | tail", "3 passed", exit_code=1, is_error=True).tests_passed_last is True
+
+
+def test_test_as_last_segment_after_pipe_trusts_exit_code():
+    assert run_of("ls | pytest", "", exit_code=1, is_error=True).tests_passed_last is False
+
+
+def test_trailing_newline_keeps_trust():
+    assert run_of("pytest\n", exit_code=1, is_error=True).tests_passed_last is False
+
+
+def test_and_chain_zero_exit_is_pass():
+    assert run_of("pytest && echo done", "1 failed", exit_code=0).tests_passed_last is True
+
+
+def test_and_chain_nonzero_falls_to_output():
+    assert run_of("pytest && echo done", "1 failed", exit_code=1, is_error=True).tests_passed_last is False
+    assert run_of("pytest && echo done", "5 passed", exit_code=1, is_error=True).tests_passed_last is True
+    assert run_of("pytest && echo done", "", exit_code=1, is_error=True).tests_passed_last is None
+
+
+def test_and_chain_with_or_tail_is_not_trusted():
+    assert run_of("pytest && echo ok || true", "1 failed", exit_code=0).tests_passed_last is False
+
+
+@pytest.mark.parametrize(
+    "cmd", ["pytest; echo $?", "pytest || echo bad", "pytest\necho x", "(pytest > o.log 2>&1; echo $?)"]
+)
+def test_other_separators_read_output(cmd):
+    assert run_of(cmd, "2 failed", exit_code=0).tests_passed_last is False
+    assert run_of(cmd, "2 passed", exit_code=1, is_error=True).tests_passed_last is True
+    assert run_of(cmd, "", exit_code=0).tests_passed_last is None
+
+
+@pytest.mark.parametrize(
+    "out",
+    [
+        "1 failed, 2 passed",
+        "== 3 errors in 1s ==",
+        "1 error in 0.1s",
+        "FAILED (failures=1)",
+        "Tests:       1 failed, 4 passed, 5 total",
+        "      Tests  2 failed | 4 passed (6)",
+        " Test Files  1 failed | 2 passed (3)",
+        "FAIL src/a.test.js",
+        " FAIL  src/a.test.ts > adds",
+        "# tests 3\n# pass 2\n# fail 1",
+        "--- FAIL: TestX (0.00s)",
+        "FAIL\tgithub.com/x/y\t0.01s",
+        "test result: FAILED. 1 passed; 1 failed",
+        "Failed!  - Failed:     1, Passed:     2",
+        "2 passed\n1 failed",
+    ],
+)
+def test_failure_markers(out):
+    assert run_of("pytest | tail", out).tests_passed_last is False
+
+
+@pytest.mark.parametrize(
+    "out",
+    [
+        "3 passed in 0.1s",
+        "0 failed, 3 passed",
+        "0 errors\n3 passed",
+        "Ran 3 tests in 0.1s\n\nOK",
+        "OK (skipped=1)",
+        "Tests:       5 passed, 5 total",
+        "# tests 3\n# pass 3\n# fail 0",
+        "ok  \tgithub.com/x/y\t0.01s",
+        "test result: ok. 3 passed; 0 failed",
+        "Passed!  - Failed:     0, Passed:     2",
+    ],
+)
+def test_pass_markers(out):
+    assert run_of("pytest | tail", out).tests_passed_last is True
+
+
+@pytest.mark.parametrize("out", ["", "collecting...", "0 passed", "0 failed"])
+def test_no_markers_unknown(out):
+    assert run_of("pytest | tail", out).tests_passed_last is None
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "(npm test 2>&1 | tail -20)",
+        "(npm test > out.log 2>&1; echo $?)",
+        "{ npm test; }",
+        "for i in 1 2 3; do npm test 2>&1 | tail -3; done",
+        "! npm test",
+        "time npm test",
+        "timeout 300 npm test",
+        "timeout -k 5 300 pytest",
+        "timeout 5m pytest",
+        "uv run --no-project --python 3.11 --with pytest python -m pytest tests/",
+        "uv run --with pytest pytest",
+        "poetry run --directory x pytest",
+        "npx -y vitest run",
+        "pnpm exec --package foo vitest",
+        "npm run -s test",
+        "npm --silent test",
+        "pnpm --silent run test:unit",
+        "yarn --silent test",
+        "bun test",
+        "python -m unittest",
+        "python -m unittest discover -s tests",
+        "make test",
+    ],
+)
+def test_more_test_shapes(cmd):
+    s = run_of(cmd)
+    assert len(s.test_runs) == 1
+    assert s.check_runs == []
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "grep -v test",
+        "ls test",
+        "python -c 'import pytest'",
+        "python - <<EOF\nimport pytest\nEOF",
+        'echo "run pytest"',
+        "test -x file",
+        'gh pr create --title "add test"',
+        "make build",
+        "timeout 300 ls",
+        "timeout pytest",
+        "npm --silent install",
+    ],
+)
+def test_still_not_test_shapes(cmd):
+    assert run_of(cmd).test_runs == []
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "tsc",
+        "npx tsc --noEmit",
+        "mypy src",
+        "uv run mypy .",
+        "pyright",
+        "ruff check .",
+        "uv run ruff check --fix",
+        "eslint .",
+        "npx eslint src",
+        "cargo check",
+        "cargo clippy -- -D warnings",
+        "cargo build --release",
+        "go build ./...",
+        "go vet ./...",
+        "npm run typecheck",
+        "npm run type-check",
+        "pnpm run lint",
+        "yarn run build:prod",
+        "yarn lint",
+        "npm run -s check",
+        "cd web && npm run lint:fix",
+    ],
+)
+def test_check_commands(cmd):
+    s = run_of(cmd, exit_code=0)
+    assert s.test_runs == []
+    assert [c.passed for c in s.check_runs] == [True]
+
+
+@pytest.mark.parametrize(
+    "cmd", ["ruff format .", "cargo fmt", "npm run dev", "npm install", "echo tsc", "ls build", "yarn add eslint"]
+)
+def test_not_check_commands(cmd):
+    assert run_of(cmd, exit_code=0).check_runs == []
+
+
+def test_check_exit_code_and_trust():
+    assert run_of("mypy .", exit_code=1, is_error=True).check_runs[0].passed is False
+    assert run_of("mypy .", is_error=True).check_runs[0].passed is False
+    assert run_of("mypy .").check_runs[0].passed is True
+    assert run_of("mypy . | tail", "error: x", exit_code=0).check_runs[0].passed is None
+    assert run_of("mypy . && echo x", exit_code=0).check_runs[0].passed is True
+    assert run_of("mypy . && echo x", exit_code=1, is_error=True).check_runs[0].passed is None
+    assert run_of("tsc; echo $?", exit_code=0).check_runs[0].passed is None
+
+
+def test_test_and_check_counts_once_as_test():
+    s = run_of("mypy . && pytest", exit_code=0)
+    assert len(s.test_runs) == 1
+    assert s.check_runs == []
+    s = run_of("npm run lint && npm test", exit_code=0)
+    assert len(s.test_runs) == 1 and s.check_runs == []
+
+
+def test_tests_passed_last_ignores_checks():
+    s = sig(call("Bash", command="pytest", exit_code=0), call("Bash", command="mypy .", exit_code=1, is_error=True))
+    assert s.tests_passed_last is True
+    assert [c.passed for c in s.check_runs] == [False]
+
+
+def test_check_runs_make_strong():
+    s = sig(call("Bash", command="ruff check ."))
+    assert s.test_runs == []
+    assert s.strength == "strong"
+    s2 = Signals()
+    s2.check_runs = [TestRun("tsc", True)]
+    assert strength_of(s2) == "strong"
+
+
+def test_success_clears_earlier_failure_for_retry():
+    s = sig(
+        call("Bash", is_error=True, command="make"),
+        call("Bash", command="make"),
+        call("Bash", command="make"),
+    )
+    assert s.retry_count == 1
+
+
+def test_from_dict_old_and_unknown_fields():
+    s = Signals.from_dict({"test_runs": [{"command": "pytest", "passed": True}], "reread_count": 2})
+    assert s.test_runs == [TestRun("pytest", True)]
+    assert s.check_runs == []
+    assert s.reread_count == 2
+    assert s.strength == "weak"
+    s = Signals.from_dict({"future": 1, "check_runs": [{"command": "tsc", "passed": None, "extra": 1}]})
+    assert s.check_runs == [TestRun("tsc", None)]
+    assert Signals.from_dict({}) == Signals()
+    assert TestRun.from_dict({}) == TestRun("", None)
+
+
+def test_round_trip_with_checks_and_none():
+    s = sig(
+        call("Bash", command="pytest | tail", exit_code=0),
+        call("Bash", command="tsc", exit_code=0),
+    )
+    assert s.tests_passed_last is None
+    assert Signals.from_dict(s.to_dict()) == s
+    assert Signals.from_dict(s.to_dict()).check_runs == [TestRun("tsc", True)]
+
+
+@pytest.mark.parametrize("tool,key", [("Write", "file_path"), ("NotebookEdit", "notebook_path")])
+def test_write_and_notebook_edit_reset_reread(tool, key):
+    s = sig(call("Read", file_path="a.py"), call(tool, **{key: "a.py"}), call("Read", file_path="a.py"))
+    assert s.reread_count == 0
