@@ -133,7 +133,22 @@ def test_audit_suspects_flags_random_token(tmp_path):
     s = Store(tmp_path)
     s.save_run(make_record(output_excerpt="id Zx9kQ2mP7vLr4TnW8bYc3HdJ end"))
     tokens = [t for _, t in s.audit_suspects()]
-    assert "Zx9kQ2mP7vLr…" in tokens
+    assert tokens == ["Zx9k…(24 chars)"]
+
+
+def test_corrupt_run_file_is_skipped_not_fatal(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(make_record())
+    next(s.runs_dir.glob("*.json")).write_text("{not json", encoding="utf-8")
+    assert s.list_runs() == []
+
+
+def test_file_count_ignores_leftover_temp_files(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(make_record())
+    (s.runs_dir / "x.json.123.tmp").write_text("{}", encoding="utf-8")
+    assert s.file_count() == 2
+    assert list(s.runs_dir.glob("*.tmp")) != []
 
 
 def test_audit_suspects_ignores_known_shapes(tmp_path):

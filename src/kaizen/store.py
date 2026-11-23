@@ -61,8 +61,11 @@ class Store:
         total = sum(Usage.from_dict(u).total for u in data["usage_by_model"].values())
         path = self._run_path(data["session_id"])
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        try:
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
         with contextlib.closing(self._connect()) as db, db:
             db.execute(
                 "INSERT OR REPLACE INTO runs VALUES (?, ?, ?, ?, ?, ?)",
@@ -80,7 +83,11 @@ class Store:
         path = self._run_path(session_id)
         if not path.exists():
             return None
-        return RunRecord.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            return None
+        return RunRecord.from_dict(data) if isinstance(data, dict) else None
 
     def list_runs(self, repo: str | None = None, limit: int | None = None) -> list[RunRecord]:
         sql = "SELECT session_id FROM runs"
@@ -157,8 +164,8 @@ class Store:
                     continue
                 if token not in seen:
                     seen.append(token)
-                    suspects.append((path.name, token[:12] + "…"))
+                    suspects.append((path.name, f"{token[:4]}…({len(token)} chars)"))
         return suspects
 
     def file_count(self) -> int:
-        return len(self._run_files()) + 1
+        return len(list(self.runs_dir.glob("*.json"))) + 1
