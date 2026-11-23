@@ -322,3 +322,43 @@ def test_secret_straddling_task_cut_never_leaves_prefix():
 def test_secret_straddling_later_request_cut_never_leaves_prefix():
     later = "y" * (300 - 10) + SECRET
     assert SECRET[:6] not in json.dumps(packet(make(messages=["first", later])))
+
+
+def pasted(text, tag_id="p1"):
+    return f'<pasted_content id="{tag_id}">{text}</pasted_content>'
+
+
+def test_pasted_block_in_task_becomes_a_marker():
+    packet = build_packet(make(messages=(f"fix this {pasted('x' * 1204)} please",)), Signals())
+    assert packet["task"] == "fix this [pasted text, 1,204 characters] please"
+
+
+def test_pasted_block_in_later_requests_and_several_blocks():
+    later = f"{pasted('abc')} and {pasted('y' * 12345, 'p2')}"
+    packet = build_packet(make(messages=("task", later)), Signals())
+    assert packet["later_requests"] == ["[pasted text, 3 characters] and [pasted text, 12,345 characters]"]
+
+
+def test_message_that_is_only_pasted_text_is_just_the_marker():
+    packet = build_packet(make(messages=(f"\n{pasted('git status output' * 50)}\n", pasted("npm ERR!"))), Signals())
+    assert packet["task"] == "[pasted text, 850 characters]"
+    assert packet["later_requests"] == ["[pasted text, 8 characters]"]
+
+
+def test_unclosed_pasted_tag_runs_to_the_end_of_the_message():
+    packet = build_packet(make(messages=('look <pasted_content id="p">' + "z" * 2000,)), Signals())
+    assert packet["task"] == "look [pasted text, 2,000 characters]"
+
+
+def test_pasted_text_is_replaced_before_the_cut_and_never_reaches_the_packet():
+    long = pasted(f"npm ERR! {SECRET} " * 400)
+    packet = build_packet(make(messages=(f"{long} then fix it", f"{long} and more")), Signals())
+    assert packet["task"].endswith("then fix it")
+    assert packet["later_requests"][0].endswith("and more")
+    text = json.dumps(packet)
+    assert "npm ERR" not in text and SECRET not in text
+
+
+def test_message_without_pasted_tags_is_unchanged():
+    packet = build_packet(make(messages=("plain <b>html</b> request",)), Signals())
+    assert packet["task"] == "plain <b>html</b> request"

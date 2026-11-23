@@ -12,6 +12,7 @@ EDIT_BUDGET = 6000
 RUNS_MAX = 10
 COMMAND_LIMIT = 120
 
+_PASTED = re.compile(r"<pasted_content\b[^>]*>(.*?)(?:</pasted_content>|\Z)", re.DOTALL)
 _WINDOWS = re.compile(r"^[A-Za-z]:|^\\\\")
 _REDIRECT = re.compile(r">>?")
 _QUIET_TARGETS = ("&", "/dev/null", "$null", "nul")
@@ -19,6 +20,10 @@ _SED_IN_PLACE = re.compile(r"\bsed\b[^|;&\n]*?\s(?:-[A-Za-z]*i\b|--in-place)")
 _MUTATING_WORDS = re.compile(r"(?<![\w.\-])(?:tee|mv|rm|cp|patch)(?![\w.\-])")
 _GIT_MUTATING = re.compile(r"\bgit\s+(?:apply\b|restore\b|checkout\b[^|;&\n]*\s--(?:\s|$))")
 _POWERSHELL_WRITERS = re.compile(r"\b(?:Set-Content|Out-File|Add-Content)\b", re.IGNORECASE)
+
+
+def without_pasted(message: str) -> str:
+    return _PASTED.sub(lambda m: f"[pasted text, {len(m.group(1)):,} characters]", message).strip()
 
 
 def _relative(path: str, cwd: str) -> str:
@@ -144,8 +149,8 @@ def build_packet(record: RunRecord, signals: Signals, include_code: bool = True)
         for tc in record.tool_calls
     )
     packet = {
-        "task": redact(messages[0])[:TASK_LIMIT] if messages else "",
-        "later_requests": [redact(m)[:LATER_LIMIT] for m in messages[1:][-LATER_MAX:]],
+        "task": redact(without_pasted(messages[0]))[:TASK_LIMIT] if messages else "",
+        "later_requests": [redact(without_pasted(m))[:LATER_LIMIT] for m in messages[1:][-LATER_MAX:]],
         "changed_files": changed,
         "edits": edits,
         "edits_truncated": truncated,

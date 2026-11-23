@@ -154,17 +154,18 @@ Tests     3 runs: 2 passed, 1 failed  (last: passed)
 Checks    none
 Asked later
           - also handle the logout page
-          - also rename the helper
+          - [pasted text, 1,204 characters]
 Corrected - told the agent the test file was in the wrong folder
 Your grade 0-10 (Enter skips, q stops): """.replace("---", "───")
 
 
 def full_session(store):
+    pasted = '<pasted_content id="1">' + "x" * 1204 + "</pasted_content>"
     seed(
         store,
         "s1",
         hours_ago=2,
-        messages=("Fix the login redirect so it keeps the query string", "also handle the logout page", "also rename the helper"),
+        messages=("Fix the login redirect so it keeps the query string", "also handle the logout page", pasted),
         calls=[
             edit("/home/dev/api-server/auth/redirect.py"),
             edit("/home/dev/api-server/tests/test_redirect.py"),
@@ -325,6 +326,21 @@ def test_empty_sections_say_none_on_same_line(home, monkeypatch, capsys):
     assert "Asked later none" in lines
     assert "Corrected none" in lines
     assert "Files     a.py" in lines
+
+
+def test_pasted_text_is_not_shown_as_a_request(home, monkeypatch, capsys):
+    pasted = '<pasted_content id="p">' + "npm ERR! secret output\n" * 50 + "</pasted_content>"
+    seed(Store(), "s1", messages=("do it", pasted))
+    shown = []
+
+    def read_line(prompt):
+        shown.append(capsys.readouterr().out)
+        return "s"
+
+    monkeypatch.setattr(cli, "read_line", read_line)
+    main(["calibrate"])
+    assert "npm ERR" not in shown[0]
+    assert "- [pasted text, 1,150 characters]" in shown[0]
 
 
 def test_paint_plain_when_colour_off(home):
