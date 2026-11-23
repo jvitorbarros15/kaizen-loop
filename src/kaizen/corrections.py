@@ -52,6 +52,10 @@ def _clean(text: str) -> str:
     return " ".join(_TAGS.sub("", text).split())[:MAX_CHARS]
 
 
+def _sent(items: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    return [(session_id, _clean(text)) for session_id, text in items[:MAX_ITEMS]]
+
+
 def _label(text: str) -> str:
     return " ".join(text.split()[:LABEL_WORDS])
 
@@ -81,7 +85,7 @@ def _valid_members(members: object, size: int) -> bool:
 def group_corrections(items: list[tuple[str, str]], runner: Runner = run_subprocess) -> list[Group] | None:
     if len(items) < 2:
         return []
-    sent = [(session_id, _clean(text)) for session_id, text in items[:MAX_ITEMS]]
+    sent = _sent(items)
     lines = [f"[{i}] {text}" for i, (_, text) in enumerate(sent, 1)]
     with claude_argv(INSTRUCTIONS) as argv:
         code, out = runner(argv, "\n".join(["<corrections>", *lines, "</corrections>"]))
@@ -113,7 +117,7 @@ def _exact(items: list[tuple[str, str]]) -> list[Group]:
 
 
 def _key(items: list[tuple[str, str]]) -> str:
-    return hashlib.sha256(json.dumps(sorted(items), ensure_ascii=False).encode("utf-8")).hexdigest()
+    return hashlib.sha256(json.dumps(sorted(_sent(items)), ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def _read(path: Path) -> dict:
