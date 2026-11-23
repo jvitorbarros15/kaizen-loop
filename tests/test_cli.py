@@ -138,6 +138,18 @@ def test_report_and_refresh_on_empty_store(home, capsys):
     assert main(["refresh"]) == 0
 
 
+def test_report_leads_with_tasks_inside_the_day_window(home, tmp_path, make_session, capsys):
+    started = datetime.now(UTC).strftime("%Y-%m-%d")
+    for sid, day in (("new", started), ("old", "2020-01-01")):
+        main(["record", "--transcript", str(make_session(tmp_path / "p", sid, started=day, edits=True))])
+    capsys.readouterr()
+    assert main(["report"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("kaizen report - tasks from the last 14 days (1 task in 1 session)")
+    assert main(["report", "--days", "100000"]) == 0
+    assert "(2 tasks in 2 sessions)" in capsys.readouterr().out
+
+
 def test_calibrate_saves_blind_grades(home, tmp_path, capsys, monkeypatch, make_session):
     store = Store()
     monkeypatch.setattr(cli, "now", lambda: datetime(2026, 11, 23, 12, 0, tzinfo=UTC))

@@ -184,7 +184,7 @@ def cmd_refresh(args) -> int:
 
 
 def cmd_report(args) -> int:
-    say(render_report(Store(), args.last))
+    say(render_report(Store(), args.last, args.days))
     return 0
 
 
@@ -389,6 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("report", help="print the report")
     p.add_argument("--last", type=int, default=20)
+    p.add_argument("--days", type=int, default=14)
     p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("calibrate", help="grade runs blind and compare with the judge")

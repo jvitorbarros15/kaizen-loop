@@ -1,14 +1,23 @@
 from collections import Counter
+from datetime import UTC, datetime, timedelta
 from statistics import mean, median
 
 from kaizen.pipeline import scored_runs
 from kaizen.score import MIN_RUNS
 from kaizen.store import Store
+from kaizen.tasks import TaskSummary
 
 AGREE_WITHIN = 2.0
 LOWEST_MAX = 5
 FILES_MAX = 5
 NO_PROJECT = "(no project)"
+TASK_LINE_MAX = 110
+UNCHECKED_SHOWN = 8
+FAILED_SHOWN = 5
+CHECK_NOTE = (
+    "This counts tests, type checks, linters and builds the tool recognises; "
+    "checking by eye in a browser is not seen."
+)
 
 
 def agreement(pairs: list[tuple[float, float]]) -> tuple[int, int]:
@@ -115,18 +124,141 @@ def _reason(run: dict) -> str:
     return f"waste {waste:.1f} per 100 calls" if waste else "no single cause stands out"
 
 
-def render_report(store: Store, last: int = 20) -> str:
-    pending = len(store.pending_scores())
-    runs = [score for _, score in scored_runs(store)[:last]]
-    if not runs:
-        if pending:
-            return f"{_plural(pending, 'run')} recorded, none scored yet. Run `kaizen score --pending`."
-        return "Nothing recorded yet. Run `kaizen import` then `kaizen score --pending`."
+def _paint(text: str, style: str) -> str:
+    from kaizen.cli import paint
 
-    head = f"kaizen report - last {len(runs)} scored runs"
+    return paint(text, style)
+
+
+def _moment(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _heading(text: str, number: int | None = None, after: str = "") -> str:
+    if number is None:
+        return _paint(text, "bold")
+    count = _paint(str(number), "yellow") if number else str(number)
+    return _paint(text, "bold") + count + _paint(after, "bold")
+
+
+def _project_lines(by_project: dict[str, list[TaskSummary]]) -> list[str]:
+    order = sorted(by_project, key=lambda n: (-len(by_project[n]), n))
+    width = max(len(n) for n in order) + 3
+    counts = {n: _plural(len(by_project[n]), "task") for n in order}
+    count_width = max(len(c) for c in counts.values()) + 3
+    kinds = {n: Counter(t.kind for t in by_project[n]) for n in order}
+    plain = {
+        n: f"edited {k['edited_checked'] + k['edited_unchecked']}:  {k['edited_checked']} ran a test or check,  "
+        f"{k['edited_unchecked']} ran none"
+        for n, k in kinds.items()
+    }
+    edited_width = max(len(p) for p in plain.values()) + 6
+    lines = []
+    for n in order:
+        k = kinds[n]
+        none = k["edited_unchecked"]
+        shown = plain[n].replace(f"{none} ran none", f"{_paint(str(none), 'yellow') if none else none} ran none")
+        pad = " " * (edited_width - len(plain[n]))
+        lines.append(f"  {n:<{width}}{counts[n]:<{count_width}}{shown}{pad}no edits {k['no_edits']}")
+        states = Counter(t.last_test for t in by_project[n])
+        if states["passed"] + states["failed"] + states["unknown"]:
+            failed = states["failed"]
+            failed_text = _paint(str(failed), "yellow") if failed else str(failed)
+            lines.append(
+                f"{' ' * (2 + width)}last test in tasks that ran one:  "
+                f"{states['passed']} passed, {failed_text} failed, {states['unknown']} unknown"
+            )
+    return lines
+
+
+def _task_lines(items: list[TaskSummary], moments: dict[tuple[str, int], datetime], limit: int) -> list[str]:
+    shown = items[:limit]
+    dates = [moments[(t.session_id, t.index)].astimezone().strftime("%Y-%m-%d %H:%M") for t in shown]
+    projects = [t.repo or NO_PROJECT for t in shown]
+    files = [_plural(t.files_edited, "file") for t in shown]
+    calls = [_plural(t.tool_calls, "call") for t in shown]
+    pw, fw, cw = (max(len(x) for x in col) for col in (projects, files, calls))
+    lines = []
+    for date, project, f, c, t in zip(dates, projects, files, calls, shown, strict=True):
+        prefix = f"  {date}  {project:<{pw}}  {f:>{fw}}  {c:>{cw}}   "
+        title = " ".join(t.title.split())
+        room = TASK_LINE_MAX - len(prefix)
+        if len(title) > room:
+            title = title[: room - 3].rstrip() + "..."
+        lines.append(prefix + title)
+    if len(items) > limit:
+        lines.append(f"  ... {len(items) - limit} more")
+    return lines
+
+
+def _old_style(store: Store, window: list[TaskSummary]) -> bool:
+    sessions = {t.session_id for t in window}
+    if len(window) != len(sessions):
+        return False
+    for session_id in sessions:
+        record = store.get_run(session_id)
+        if record is None or record.user_message_times:
+            return False
+    return True
+
+
+def _task_sections(store: Store, days: int, now: datetime) -> list[str]:
+    everything = store.list_tasks()
+    cutoff = now - timedelta(days=days)
+    moments: dict[tuple[str, int], datetime] = {}
+    window = []
+    for t in everything:
+        moment = _moment(t.started_at)
+        if moment is not None and moment >= cutoff:
+            moments[(t.session_id, t.index)] = moment
+            window.append(t)
+    window.sort(key=lambda t: (moments[(t.session_id, t.index)], t.session_id, t.index), reverse=True)
+    if everything and not window:
+        return [f"No task started in the last {days} days. Use --days to look further back."]
+    if not window or _old_style(store, window):
+        return ["No task data yet for these sessions. Run kaizen import --all once to rebuild them."]
+
+    sessions = len({t.session_id for t in window})
+    counted = f"{_plural(len(window), 'task')} in {_plural(sessions, 'session')}"
+    out = [f"kaizen report - tasks from the last {days} days ({counted})"]
+    by_project: dict[str, list[TaskSummary]] = {}
+    for t in window:
+        by_project.setdefault(t.repo or NO_PROJECT, []).append(t)
+    out += ["", _heading("Tasks by project"), *_project_lines(by_project)]
+
+    editing = [t for t in window if t.kind != "no_edits"]
+    unchecked = [t for t in window if t.kind == "edited_unchecked"]
+    out.append("")
+    if not editing:
+        out += [_heading("Edited files and ran no test or check"), "  No task edited any file in this period."]
+    elif not unchecked:
+        out += [
+            _heading("Edited files and ran no test or check"),
+            "  Every task that edited files also ran a test or check. Good.",
+        ]
+    else:
+        tail = f" of {len(editing)} editing tasks, most recent first)"
+        out += [
+            _heading("Edited files and ran no test or check (", len(unchecked), tail),
+            *_task_lines(unchecked, moments, UNCHECKED_SHOWN),
+            "  " + CHECK_NOTE,
+        ]
+
+    failed = [t for t in window if t.last_test == "failed"]
+    out += ["", _heading("Tasks whose last test failed")]
+    out += _task_lines(failed, moments, FAILED_SHOWN) if failed else ["  No task ended on a failing test."]
+    return out
+
+
+def _graded_sections(runs: list[dict], pending: int) -> list[str]:
+    out = [_heading(f"Graded sessions (last {len(runs)})")]
     if pending:
-        head += f" ({pending} more recorded, not scored yet)"
-    out = [head, "", "By project"]
+        out.append(f"  {_plural(pending, 'more session')} recorded, not scored yet. Run kaizen score --pending.")
+    out += ["", "By project"]
 
     projects: dict[str, list[dict]] = {}
     for run in runs:
@@ -164,4 +296,19 @@ def render_report(store: Store, last: int = 20) -> str:
     out += ["", "Repeated corrections (all runs, weak ones included)"]
     repeated = sorted(((c, n) for c, n in counts.items() if n >= 2), key=lambda kv: (-kv[1], kv[0]))
     out += [f'  "{c}"  x{n}' for c, n in repeated] or ["  No correction was repeated in these runs."]
+    return out
+
+
+def render_report(store: Store, last: int = 20, days: int = 14, now: datetime | None = None) -> str:
+    pending = len(store.pending_scores())
+    scored = scored_runs(store)
+    if not scored and not pending:
+        return "Nothing recorded yet. Run `kaizen import` then `kaizen score --pending`."
+    out = _task_sections(store, days, now or datetime.now(UTC))
+    runs = [score for _, score in scored[:last]]
+    out.append("")
+    if runs:
+        out += _graded_sections(runs, pending)
+    else:
+        out.append("No session has been graded yet. Run kaizen score --pending.")
     return "\n".join(out)
