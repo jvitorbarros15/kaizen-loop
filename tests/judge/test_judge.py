@@ -373,3 +373,9 @@ def test_any_evidence_still_calls_the_model(patch):
     v = judge({**EMPTY, **patch}, ["haiku"], fake)
     assert len(fake.calls) == 1
     assert v.quality == 8.0
+
+
+def test_rubric_version_is_two_and_names_shipping_actions():
+    assert RUBRIC_VERSION == 2
+    assert "shipping_actions" in RUBRIC
+    assert "not of whether it was right" in RUBRIC

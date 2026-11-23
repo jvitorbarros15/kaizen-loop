@@ -13,6 +13,7 @@ from kaizen import __version__
 from kaizen.config import load_config
 from kaizen.corrections import cached_groups, collect
 from kaizen.external import run_subprocess
+from kaizen.judge.rubric import RUBRIC_VERSION
 from kaizen.pipeline import (
     build_run_packet,
     build_task_packet,
@@ -175,13 +176,16 @@ def _task_line(saved: dict) -> str:
 
 
 def _score_tasks(store: Store, config: dict, limit: int) -> int:
-    graded = 0
-    for summary in store.pending_task_scores(limit):
+    graded = regrades = 0
+    for summary in store.pending_task_scores(limit, RUBRIC_VERSION):
+        regraded = store.get_task_score(summary.key) is not None
         saved = score_task(summary.session_id, summary.index, store, config, RUNNER)
         if saved is not None:
             say(_task_line(saved))
             graded += 1
-    say(f"Graded {graded} tasks ({len(store.pending_task_scores())} still pending)")
+            regrades += regraded
+    extra = f", {regrades} of them regrades" if regrades else ""
+    say(f"Graded {graded} tasks{extra} ({len(store.pending_task_scores(None, RUBRIC_VERSION))} still pending)")
     return 0
 
 

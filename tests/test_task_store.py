@@ -139,3 +139,22 @@ def test_audit_covers_task_scores(tmp_path):
     with contextlib.closing(sqlite3.connect(store.db_path)) as db, db:
         db.execute("UPDATE task_scores SET json = ?", ('{"x": "id Zx9kQ2mP7vLr4TnW8bYc3HdJ end"}',))
     assert ("ledger.db", "Zx9k…(24 chars)") in store.audit_suspects()
+
+
+def test_old_rubric_grade_is_pending_again_only_when_a_version_is_given(tmp_path, make_tasks):
+    store = Store(tmp_path)
+    store.save_run(two(make_tasks))
+    first, second = store.pending_task_scores()
+    store.save_task_score(first.key, first.session_id, first.index, {"verdict": {"quality": 5.0, "rubric_version": 1}})
+    store.save_task_score(second.key, second.session_id, second.index, {"verdict": {"quality": 6.0, "rubric_version": 2}})
+    assert store.pending_task_scores() == []
+    assert [t.key for t in store.pending_task_scores(rubric_version=2)] == [first.key]
+    assert [t.key for t in store.pending_task_scores(rubric_version=1)] == []
+
+
+def test_grade_without_a_rubric_version_counts_as_old(tmp_path, make_tasks):
+    store = Store(tmp_path)
+    store.save_run(two(make_tasks))
+    first = store.pending_task_scores()[0]
+    store.save_task_score(first.key, first.session_id, first.index, {"verdict": {"quality": 5.0}})
+    assert first.key in [t.key for t in store.pending_task_scores(rubric_version=2)]

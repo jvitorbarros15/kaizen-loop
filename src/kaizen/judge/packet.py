@@ -3,7 +3,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 
 from kaizen.record.model import RunRecord
 from kaizen.redact import redact, redact_obj
-from kaizen.signals import SHELL_TOOLS, WRITE_TOOLS, Signals, TestRun, analyse_command
+from kaizen.signals import SHELL_TOOLS, WRITE_TOOLS, Signals, TestRun, analyse_command, split_segments
 
 TASK_LIMIT = 1500
 LATER_LIMIT = 300
@@ -11,6 +11,7 @@ LATER_MAX = 10
 EDIT_BUDGET = 6000
 RUNS_MAX = 10
 COMMAND_LIMIT = 120
+SHIPPING_MAX = 15
 
 _PASTED = re.compile(r"<pasted_content\b[^>]*>(.*?)(?:</pasted_content>|\Z)", re.DOTALL)
 _WINDOWS = re.compile(r"^[A-Za-z]:|^\\\\")
@@ -19,6 +20,7 @@ _QUIET_TARGETS = ("&", "/dev/null", "$null", "nul")
 _SED_IN_PLACE = re.compile(r"\bsed\b[^|;&\n]*?\s(?:-[A-Za-z]*i\b|--in-place)")
 _MUTATING_WORDS = re.compile(r"(?<![\w.\-])(?:tee|mv|rm|cp|patch)(?![\w.\-])")
 _GIT_MUTATING = re.compile(r"\bgit\s+(?:apply\b|restore\b|checkout\b[^|;&\n]*\s--(?:\s|$))")
+_SHIPPING = re.compile(r"\bgit\s+(?:commit|merge|push|rebase|revert)\b|\bgh\s+pr\s+(?:create|merge)\b")
 _POWERSHELL_WRITERS = re.compile(r"\b(?:Set-Content|Out-File|Add-Content)\b", re.IGNORECASE)
 
 
@@ -129,6 +131,28 @@ def _verified_after_last_edit(record: RunRecord, signals: Signals) -> bool:
     return False
 
 
+def _shipping_actions(record: RunRecord) -> list[dict]:
+    found: list[dict] = []
+    for tc in record.tool_calls:
+        if tc.name not in SHELL_TOOLS or tc.agent_id is not None or not isinstance(tc.input, dict):
+            continue
+        command = tc.input.get("command")
+        if not isinstance(command, str):
+            continue
+        result = tc.exit_code == 0 if tc.exit_code is not None else not tc.is_error
+        segments = [(text, sep) for text, sep in split_segments(command) if text.strip()]
+        for i, (text, _) in enumerate(segments):
+            match = _SHIPPING.search(text)
+            if match is None:
+                continue
+            if i == len(segments) - 1:
+                ok = result
+            else:
+                ok = True if result and all(sep == "&&" for _, sep in segments[i:-1]) else None
+            found.append({"action": " ".join(match.group().split()), "ok": ok})
+    return found[-SHIPPING_MAX:]
+
+
 def build_packet(record: RunRecord, signals: Signals, include_code: bool = True) -> dict:
     messages = record.user_messages
     changed: list[str] = []
@@ -166,5 +190,6 @@ def build_packet(record: RunRecord, signals: Signals, include_code: bool = True)
             "interruptions": signals.interruptions,
         },
         "corrections": signals.corrections,
+        "shipping_actions": _shipping_actions(record),
     }
     return redact_obj(packet)

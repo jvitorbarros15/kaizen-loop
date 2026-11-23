@@ -221,3 +221,23 @@ def test_show_packet_with_task_prints_that_tasks_packet_and_calls_nothing(home, 
     assert main(["score", "s1", "--show-packet", "--task", "9"]) == 1
     assert main(["score", "--show-packet", "--task", "0"]) == 2
     assert Store().list_task_scores() == []
+
+
+def test_score_tasks_regrades_old_rubric_grades_and_counts_them(home, make_tasks, capsys, monkeypatch):
+    store = Store()
+    store.save_run(make_tasks(tasks=[{"prompts": [ASK], "files": ["nav.py"]}, {"prompts": [ASK2], "files": ["s.py"]}]))
+    monkeypatch.setattr(cli, "RUNNER", FakeRunner())
+    assert main(["score", "--tasks"]) == 0
+    capsys.readouterr()
+    old = next(t for t in store.list_tasks() if t.index == 0)
+    saved = store.get_task_score(old.key)
+    saved["verdict"]["rubric_version"] = 1
+    saved["verdict"]["quality"] = 2.0
+    store.save_task_score(old.key, old.session_id, old.index, saved)
+    assert main(["score", "--tasks"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[-1] == "Graded 1 tasks, 1 of them regrades (0 still pending)"
+    assert store.get_task_score(old.key)["verdict"]["quality"] == 8.0
+    assert store.get_task_score(old.key)["verdict"]["rubric_version"] == 2
+    assert main(["score", "--tasks"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["Graded 0 tasks (0 still pending)"]
