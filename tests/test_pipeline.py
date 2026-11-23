@@ -103,9 +103,9 @@ def test_score_run_all_backends_failing_saves_unavailable_score(make_session, st
 
 def test_score_run_with_baseline_produces_composite(make_session, store, tmp_path, config):
     for i in range(5):
-        record(make_session, store, tmp_path, f"old{i}")
+        record(make_session, store, tmp_path, f"old{i}", edits=True)
         score_run(f"old{i}", store, config, FakeRunner())
-    record(make_session, store, tmp_path, "new")
+    record(make_session, store, tmp_path, "new", edits=True)
     result = score_run("new", store, config, FakeRunner())
     assert result["score"]["baseline"] != "insufficient"
     assert result["score"]["total"] is not None
@@ -121,7 +121,7 @@ def test_corrections_failure_is_null_in_packet_and_unknown_in_score(make_session
             seen.append(stdin)
         return FakeRunner(corrections=None)(argv, stdin)
 
-    record(make_session, store, tmp_path, "s1", prompts=["do it", "no, that is wrong"])
+    record(make_session, store, tmp_path, "s1", prompts=["do it", "no, that is wrong"], edits=True)
     result = score_run("s1", store, config, runner)
     assert result["corrections_known"] is False
     assert result["signals"]["corrections"] == []
@@ -130,7 +130,7 @@ def test_corrections_failure_is_null_in_packet_and_unknown_in_score(make_session
 
 def test_corrections_disabled_makes_no_corrections_call(make_session, store, tmp_path, config):
     config["corrections"]["enabled"] = False
-    record(make_session, store, tmp_path, "s1", prompts=["do it", "no, that is wrong"])
+    record(make_session, store, tmp_path, "s1", prompts=["do it", "no, that is wrong"], edits=True)
     runner = FakeRunner()
     result = score_run("s1", store, config, runner)
     assert result["corrections_known"] is False
@@ -154,7 +154,7 @@ def test_build_run_packet_calls_no_runner(make_session, store, tmp_path, config)
 
 
 def test_refresh_updates_open_pr_without_judge(make_session, store, tmp_path, config):
-    record(make_session, store, tmp_path, "s1", pr_url=PR)
+    record(make_session, store, tmp_path, "s1", pr_url=PR, edits=True)
     score_run("s1", store, config, FakeRunner(pr_state="OPEN"))
     assert store.get_score("s1")["signals"]["pr_outcome"] == "open"
     runner = FakeRunner(pr_state="MERGED")

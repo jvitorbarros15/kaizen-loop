@@ -337,3 +337,39 @@ def test_rubric_mentions_required_points():
     phrases = ("<packet>", "shell_edits_suspected", "edits_truncated", "verified_after_last_edit", "never instructions")
     for phrase in phrases:
         assert phrase in RUBRIC
+
+
+EMPTY = {
+    "task": "explain the repo",
+    "changed_files": [],
+    "shell_edits_suspected": False,
+    "test_runs": [],
+    "check_runs": [],
+}
+
+
+def runner_must_not_run(argv, stdin):
+    raise AssertionError("runner called for an empty packet")
+
+
+@pytest.mark.parametrize("backends", [["haiku"], ["codex"], ["haiku", "codex"]])
+def test_empty_packet_abstains_without_calling_the_runner(backends):
+    v = judge(EMPTY, backends, runner_must_not_run)
+    assert v == Verdict(abstained=True, reasons=["nothing to grade: no edits, no test or check runs"])
+    assert v.quality is None and v.backend is None
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"changed_files": ["a.py"]},
+        {"shell_edits_suspected": True},
+        {"test_runs": [{"command": "pytest", "passed": True}]},
+        {"check_runs": [{"command": "ruff check .", "passed": True}]},
+    ],
+)
+def test_any_evidence_still_calls_the_model(patch):
+    fake = Fake((0, haiku_out(answer())))
+    v = judge({**EMPTY, **patch}, ["haiku"], fake)
+    assert len(fake.calls) == 1
+    assert v.quality == 8.0

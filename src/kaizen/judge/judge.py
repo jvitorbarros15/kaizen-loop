@@ -131,7 +131,18 @@ def _ask_codex(packet: dict, runner: Runner) -> tuple[bool, Any | None]:
 _ASKERS = {"haiku": _ask_haiku, "codex": _ask_codex}
 
 
+def _nothing_to_grade(packet: dict) -> bool:
+    return not (
+        packet.get("changed_files")
+        or packet.get("shell_edits_suspected")
+        or packet.get("test_runs")
+        or packet.get("check_runs")
+    )
+
+
 def judge(packet: dict, backends: list[str], runner: Runner = run_subprocess) -> Verdict:
+    if _nothing_to_grade(packet):
+        return Verdict(abstained=True, reasons=["nothing to grade: no edits, no test or check runs"])
     for backend in backends:
         ask = _ASKERS.get(backend)
         if ask is None:

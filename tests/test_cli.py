@@ -84,13 +84,26 @@ def test_show_packet_needs_session(home, capsys):
 
 
 def test_score_prints_line_per_session(home, tmp_path, make_session, capsys, monkeypatch):
-    path = make_session(tmp_path / "projects" / "a", "s1")
+    path = make_session(tmp_path / "projects" / "a", "s1", edits=True)
     main(["record", "--transcript", str(path)])
     capsys.readouterr()
     monkeypatch.setattr(cli, "RUNNER", lambda argv, stdin=None: (1, ""))
     assert main(["score", "--pending"]) == 0
     line = capsys.readouterr().out.strip()
     assert line.split() == ["s1", "-", "weak", "none", "unavailable"]
+
+
+def test_score_of_empty_session_abstains_without_a_model_call(home, tmp_path, make_session, capsys, monkeypatch):
+    path = make_session(tmp_path / "projects" / "a", "s1")
+    main(["record", "--transcript", str(path)])
+    capsys.readouterr()
+
+    def boom(argv, stdin=None):
+        raise AssertionError("model called")
+
+    monkeypatch.setattr(cli, "RUNNER", boom)
+    assert main(["score", "--pending"]) == 0
+    assert Store().get_score("s1")["verdict"]["abstained"] is True
 
 
 def test_report_and_refresh_on_empty_store(home, capsys):
@@ -185,7 +198,7 @@ def test_hook_spawns_detached_record(home, transcript, capsys, monkeypatch):
     assert len(spawn.calls) == 1
     argv, kwargs = spawn.calls[0]
     assert argv[0] == sys.executable
-    assert argv[1:] == ["-m", "kaizen.cli", "record", "--transcript", str(transcript)]
+    assert argv[1:] == ["-m", "kaizen.cli", "record", "--transcript", str(transcript), "--skip-temp"]
     assert kwargs["stdin"] is subprocess.DEVNULL
     assert kwargs["stdout"] is subprocess.DEVNULL
     assert kwargs["stderr"] is subprocess.DEVNULL
@@ -250,3 +263,30 @@ def test_record_failure_logs_and_returns_1(home, tmp_path, capsys):
     assert main(["record", "--transcript", str(tmp_path / "missing.jsonl")]) == 1
     assert capsys.readouterr() == ("", "")
     assert len(hook_log_lines(home)) == 1
+
+
+def test_hook_log_message_is_redacted(home):
+    cli.log_hook("RuntimeError", f"record failed: token {GHP} in path")
+    text = (home / "hook.log").read_text(encoding="utf-8")
+    assert GHP not in text
+    assert "record failed" in text
+
+
+def test_record_skip_temp_ignores_scratch_sessions(home, tmp_path, make_session, capsys):
+    path = make_session(tmp_path / "projects" / "a", "s1", cwd=str(tmp_path / "scratch"))
+    assert main(["record", "--transcript", str(path), "--skip-temp"]) == 0
+    assert capsys.readouterr() == ("", "")
+    assert Store().get_run("s1") is None
+
+
+def test_record_without_flag_records_temp_sessions(home, tmp_path, make_session, capsys):
+    path = make_session(tmp_path / "projects" / "a", "s1", cwd=str(tmp_path / "scratch"))
+    assert main(["record", "--transcript", str(path)]) == 0
+    assert capsys.readouterr().out.strip() == "s1 recorded"
+    assert Store().get_run("s1") is not None
+
+
+def test_record_skip_temp_still_records_normal_sessions(home, tmp_path, make_session, capsys):
+    path = make_session(tmp_path / "projects" / "a", "s1")
+    assert main(["record", "--transcript", str(path), "--skip-temp"]) == 0
+    assert capsys.readouterr().out.strip() == "s1 recorded"
