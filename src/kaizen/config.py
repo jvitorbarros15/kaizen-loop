@@ -18,5 +18,6 @@ def load_config(root: Path | None = None) -> dict:
     if path.exists():
         with path.open("rb") as f:
             for section, values in tomllib.load(f).items():
-                cfg.setdefault(section, {}).update(values)
+                if isinstance(values, dict):
+                    cfg.setdefault(section, {}).update(values)
     return cfg

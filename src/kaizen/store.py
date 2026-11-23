@@ -60,7 +60,7 @@ class Store:
         data = redact_obj(record.to_dict())
         total = sum(Usage.from_dict(u).total for u in data["usage_by_model"].values())
         path = self._run_path(data["session_id"])
-        tmp = path.with_name(path.name + ".tmp")
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, path)
         with contextlib.closing(self._connect()) as db, db:
