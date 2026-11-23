@@ -105,11 +105,19 @@ def test_calibrate_saves_blind_grades(home, tmp_path, capsys, monkeypatch, make_
         store.save_score(sid, {"score": {"quality": 7.3}, "signals": {"test_runs": []}, "verdict": verdict, "corrections_known": False})
     capsys.readouterr()
     answers = iter(["8", "s", "q"])
-    monkeypatch.setattr(cli, "read_line", lambda prompt: next(answers))
+    shown_before_grading = []
+
+    def read_line(prompt):
+        shown_before_grading.append(capsys.readouterr().out)
+        return next(answers)
+
+    monkeypatch.setattr(cli, "read_line", read_line)
     assert main(["calibrate", "--n", "3"]) == 0
     out = capsys.readouterr().out
-    assert "7.3" not in out
-    assert "matched the ask" in out
+    first, second, third = shown_before_grading
+    assert "7.3" not in first and "matched the ask" not in first
+    assert "Judge gave 7.3" in second and "matched the ask" in second
+    assert "Judge gave" not in third and "matched the ask" not in third
     assert len(store.human_grades()) == 1
     assert store.human_grades()[0][1] == 8.0
     assert "Judge agrees with you on 1 of 1 runs" in out
