@@ -553,7 +553,56 @@ def test_from_dict_tolerates_missing_and_unknown_fields():
 
 
 def test_schema_version_in_dict():
-    assert parse_transcript(FIX / "session_basic.jsonl").to_dict()["schema_version"] == 1
+    assert parse_transcript(FIX / "session_basic.jsonl").to_dict()["schema_version"] == 2
+
+
+def test_user_message_times_parallel_to_messages():
+    r = parse_transcript(FIX / "session_basic.jsonl")
+    assert r.user_message_times == ["2026-01-01T10:00:00.000Z"]
+    assert len(r.user_message_times) == len(r.user_messages)
+
+
+def test_user_message_time_empty_when_line_has_none(tmp_path):
+    p = write(tmp_path, [
+        user_line("first", timestamp="2026-01-01T10:00:00Z"),
+        user_line("second"),
+    ])
+    r = parse_transcript(p)
+    assert r.user_messages == ["first", "second"]
+    assert r.user_message_times == ["2026-01-01T10:00:00Z", ""]
+
+
+def test_subagent_files_add_no_prompt_times():
+    r = parse_session(SUB / "00000000-0000-4000-8000-0000000000aa.jsonl")
+    assert len(r.user_message_times) == len(r.user_messages) == 1
+
+
+def test_from_dict_tolerates_missing_times():
+    r = RunRecord.from_dict({"user_messages": ["a"]})
+    assert r.user_message_times == []
+
+
+SUMMARY = "This session is being continued from a previous conversation that ran out of context. Summary: ..."
+
+
+def test_continuation_summary_skipped_by_flag(tmp_path):
+    p = write(tmp_path, [
+        user_line("real request", timestamp="t1"),
+        user_line("anything at all", isCompactSummary=True, timestamp="t2"),
+        user_line("next request", timestamp="t3"),
+    ])
+    r = parse_transcript(p)
+    assert r.user_messages == ["real request", "next request"]
+    assert r.user_message_times == ["t1", "t3"]
+
+
+def test_continuation_summary_skipped_by_text(tmp_path):
+    p = write(tmp_path, [
+        user_line("real request"),
+        user_line("<system-reminder>x</system-reminder>" + SUMMARY),
+        user_line([{"type": "text", "text": SUMMARY}]),
+    ])
+    assert parse_transcript(p).user_messages == ["real request"]
 
 
 def text_block(t):

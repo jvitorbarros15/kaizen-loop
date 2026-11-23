@@ -20,6 +20,7 @@ HARNESS_TAGS = (
     "command-message",
 )
 INTERRUPTED = "[Request interrupted by user"
+CONTINUATION = "This session is being continued from a previous conversation"
 
 
 WINDOW = 4096
@@ -186,6 +187,7 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
     calls: list[ToolCall] = []
     by_id: dict[str, ToolCall] = {}
     prompts: list[str] = []
+    prompt_times: list[str] = []
     skills: list[str] = []
     prs: list[str] = []
     final_message = ""
@@ -292,11 +294,12 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
                                 call.exit_code = int(m.group(1)) if m else None
                             else:
                                 call.exit_code = 0
-                if not has_result and obj.get("isMeta") is not True:
+                if not has_result and obj.get("isMeta") is not True and obj.get("isCompactSummary") is not True:
                     text, interrupted = _prompt(content)
                     interruptions += interrupted
-                    if text:
+                    if text and not text.startswith(CONTINUATION):
                         prompts.append(text)
+                        prompt_times.append(ts)
             elif kind == "cost-state":
                 total = obj.get("totalCostUSD")
                 if isinstance(total, (int, float)) and not isinstance(total, bool):
@@ -322,6 +325,7 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
         usage_by_model=usage,
         tool_calls=calls,
         user_messages=prompts,
+        user_message_times=prompt_times,
         skills_used=skills,
         pr_urls=prs,
         cost_usd=cost,
