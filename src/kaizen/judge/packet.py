@@ -62,11 +62,13 @@ def _raw_edits(record: RunRecord) -> list[tuple[str, str | None, str]]:
     found: list[tuple[str, str | None, str]] = []
     for tc in record.tool_calls:
         inp = tc.input if isinstance(tc.input, dict) else {}
-        path = inp.get("file_path")
+        path = inp.get("notebook_path") if tc.name == "NotebookEdit" else inp.get("file_path")
         if not isinstance(path, str) or not path:
             continue
         rel = _relative(path, record.cwd)
-        if tc.name == "Edit":
+        if tc.name == "NotebookEdit":
+            found.append((rel, None, _text(inp.get("new_source"))))
+        elif tc.name == "Edit":
             found.append((rel, _text(inp.get("old_string")), _text(inp.get("new_string"))))
         elif tc.name == "Write":
             found.append((rel, None, _text(inp.get("content"))))
@@ -142,8 +144,8 @@ def build_packet(record: RunRecord, signals: Signals, include_code: bool = True)
         for tc in record.tool_calls
     )
     packet = {
-        "task": messages[0][:TASK_LIMIT] if messages else "",
-        "later_requests": [m[:LATER_LIMIT] for m in messages[1:][-LATER_MAX:]],
+        "task": redact(messages[0])[:TASK_LIMIT] if messages else "",
+        "later_requests": [redact(m)[:LATER_LIMIT] for m in messages[1:][-LATER_MAX:]],
         "changed_files": changed,
         "edits": edits,
         "edits_truncated": truncated,

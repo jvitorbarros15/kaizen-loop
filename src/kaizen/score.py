@@ -2,7 +2,7 @@ from dataclasses import asdict, dataclass, fields
 from statistics import median
 
 from kaizen.record.model import RunRecord
-from kaizen.signals import Signals
+from kaizen.signals import Signals, normalise_path
 
 BUCKETS = ("0", "1-2", "3-9", "10+")
 MIN_RUNS = 5
@@ -54,7 +54,7 @@ def size_bucket(record: RunRecord) -> str:
             continue
         path = tc.input.get(key)
         if isinstance(path, str):
-            paths.add(path.replace("\\", "/"))
+            paths.add(normalise_path(path))
     n = len(paths)
     if n == 0:
         return "0"
@@ -85,6 +85,8 @@ def _baseline(kind: str, runs: list[RunStats]) -> Baseline:
 
 
 def baseline_for(stats: RunStats, history: list[RunStats]) -> Baseline | None:
+    if stats.repo is None:
+        return None
     same_repo = [h for h in history if h.repo == stats.repo]
     same_bucket = [h for h in same_repo if h.bucket == stats.bucket]
     if len(same_bucket) >= MIN_RUNS:
