@@ -3,7 +3,8 @@ from datetime import UTC, datetime, timedelta
 from statistics import mean, median
 
 from kaizen.corrections import Group
-from kaizen.pipeline import scored_runs
+from kaizen.judge.rubric import RUBRIC_VERSION
+from kaizen.pipeline import scored_runs, task_for_rating
 from kaizen.score import MIN_RUNS
 from kaizen.store import Store
 from kaizen.tasks import TaskSummary
@@ -31,12 +32,16 @@ def agreement(pairs: list[tuple[float, float]]) -> tuple[int, int]:
     return sum(abs(judge - human) <= AGREE_WITHIN for judge, human in pairs), len(pairs)
 
 
+def constant_agreement(pairs: list[tuple[float, float]]) -> tuple[float, int]:
+    constant = median(human for _, human in pairs)
+    return constant, sum(abs(constant - human) <= AGREE_WITHIN for _, human in pairs)
+
+
 def calibration_summary(pairs: list[tuple[float, float]], abstained: int) -> str:
     if not pairs:
         return f"There is nothing to compare yet: no run has a judge score and your grade. Abstentions: {abstained}."
     agreeing, total = agreement(pairs)
-    constant = median(human for _, human in pairs)
-    constant_agreeing = sum(abs(constant - human) <= AGREE_WITHIN for _, human in pairs)
+    constant, constant_agreeing = constant_agreement(pairs)
     return "\n".join(
         [
             f"Judge agrees with you on {agreeing} of {total} runs (within {AGREE_WITHIN:g} points).",
@@ -416,4 +421,164 @@ def render_report(
             "",
             "No session has been graded yet. Run kaizen score --pending.",
         ]
+    return "\n".join(out)
+
+
+CHECK_SIDE_MIN = 5
+CHECK_LISTED = 5
+HIGH_JUDGE = 7.0
+LOW_JUDGE = 3.0
+CHECK_NOTE_LAST = (
+    "This checks that the judge is consistent with facts it could see. It does not show the judge is right."
+)
+
+
+def _version(saved: dict) -> int:
+    version = (saved.get("verdict") or {}).get("rubric_version")
+    return version if isinstance(version, int) and not isinstance(version, bool) else 1
+
+
+def _noun(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+def _day(saved: dict) -> str:
+    started = _moment(saved.get("started_at"))
+    return started.astimezone().strftime("%Y-%m-%d") if started else "unknown"
+
+
+def _where(saved: dict, repo_width: int) -> str:
+    title = " ".join(str(saved.get("title") or "").split())
+    return f"{_day(saved)}  {(saved.get('repo') or NO_PROJECT).ljust(repo_width)}   {title}"
+
+
+def _cut_line(text: str) -> str:
+    return text if len(text) <= LINE_MAX else text[: LINE_MAX - 3].rstrip() + "..."
+
+
+def _rated(store: Store, keys: set[str]) -> tuple[dict[str, float], int]:
+    rated = {key: grade for key, grade in store.human_grades() if key in keys}
+    from_kz: dict[str, float] = {}
+    unbound = 0
+    for rating in store.list_ratings():
+        task = task_for_rating(store, rating)
+        if task is None:
+            unbound += 1
+        elif task.key not in from_kz:
+            from_kz[task.key] = rating["grade"]
+    return {**rated, **from_kz}, unbound
+
+
+def _ratings_section(rated: dict[str, float], unbound: int, graded: dict[str, dict]) -> list[str]:
+    out = [_paint("Against your ratings (kz and calibrate)", "bold")]
+    pairs = [(graded[key]["verdict"]["quality"], grade, graded[key]) for key, grade in rated.items() if key in graded]
+    waiting = len(rated) - len(pairs)
+    if not rated:
+        out.append("  No rated tasks yet. Rate one with kz 7 inside Claude Code, kaizen rate 7, or kaizen calibrate.")
+    if pairs:
+        numbers = [(judge, human) for judge, human, _ in pairs]
+        agreeing, total = agreement(numbers)
+        constant, constant_agreeing = constant_agreement(numbers)
+        out += [
+            f"  Judge agrees with you on {agreeing} of {total} rated tasks (within {AGREE_WITHIN:g} points).",
+            f"  A constant judge answering {constant:g} would agree on {constant_agreeing} of {total}.",
+        ]
+        gaps = sorted(
+            (p for p in pairs if abs(p[0] - p[1]) > AGREE_WITHIN),
+            key=lambda p: (-abs(p[0] - p[1]), p[2].get("started_at") or ""),
+        )[:CHECK_LISTED]
+        if gaps:
+            width = max(len(g[2].get("repo") or NO_PROJECT) for g in gaps)
+            out.append("  Largest gaps")
+            out += [
+                _cut_line(f"    You {human:.1f}   Judge {judge:.1f}   {_where(saved, width)}")
+                for judge, human, saved in gaps
+            ]
+    if waiting:
+        verb = "has" if waiting == 1 else "have"
+        out.append(f"  {_noun(waiting, 'rated task', 'rated tasks')} {verb} no judge grade yet.")
+    if unbound:
+        out.append(f"  {_noun(unbound, 'rating', 'ratings')} could not be tied to a task.")
+    return out
+
+
+def _is_trouble(saved: dict) -> bool:
+    signals = saved.get("signals") or {}
+    return (
+        bool(signals.get("corrections"))
+        or saved.get("last_test") == "failed"
+        or bool(signals.get("interruptions"))
+    )
+
+
+def _inversion_note(saved: dict) -> str:
+    corrections = len((saved.get("signals") or {}).get("corrections") or [])
+    reasons = []
+    if corrections >= 2:
+        reasons.append(f"{corrections} corrections")
+    if saved.get("last_test") == "failed":
+        reasons.append("a failed last test")
+    return " and ".join(reasons)
+
+
+def _quality_of(saved: dict) -> float:
+    return saved["verdict"]["quality"]
+
+
+def _evidence_section(graded: dict[str, dict]) -> list[str]:
+    out = [_paint("Against the evidence the judge was shown", "bold")]
+    known = [s for s in graded.values() if s.get("corrections_known")]
+    clean = [s for s in known if not _is_trouble(s)]
+    trouble = [s for s in known if _is_trouble(s)]
+    labels = [
+        ("Tasks that went cleanly (no correction, no failed test, no interruption)", clean),
+        ("Tasks with trouble (a correction, a failed last test, or an interruption)", trouble),
+    ]
+    enough = len(clean) >= CHECK_SIDE_MIN and len(trouble) >= CHECK_SIDE_MIN
+    wide = max(len(label) for label, _ in labels) + 3
+    counts = [_noun(len(group), "task", "tasks") for _, group in labels]
+    for (label, group), count in zip(labels, counts, strict=True):
+        line = f"  {label.ljust(wide)}{count.rjust(max(map(len, counts)))}"
+        if enough:
+            line += f"   judge {mean(map(_quality_of, group)):.1f} avg"
+        out.append(line)
+    left_out = len(graded) - len(known)
+    if left_out:
+        noun = _noun(left_out, "graded task was", "graded tasks were")
+        out.append(f"  {noun} left out because their corrections are unknown.")
+    if not enough:
+        out.append(f"  Too few tasks on one side to compare; at least {CHECK_SIDE_MIN} are needed on each.")
+    else:
+        separation = mean(map(_quality_of, clean)) - mean(map(_quality_of, trouble))
+        out.append(f"  Separation: {separation:.1f} points.")
+        high = sorted(
+            (s for s in trouble if _quality_of(s) >= HIGH_JUDGE and _inversion_note(s)),
+            key=lambda s: -_quality_of(s),
+        )[:CHECK_LISTED]
+        low = sorted((s for s in clean if _quality_of(s) <= LOW_JUDGE), key=_quality_of)[:CHECK_LISTED]
+        rows = [(f"Judge {_quality_of(s):.1f} with {_inversion_note(s)}", s) for s in high]
+        rows += [(f"Judge {_quality_of(s):.1f} on a clean task", s) for s in low]
+        if not rows:
+            out.append("  Inversions: none.")
+        else:
+            width = max(len(text) for text, _ in rows)
+            repo_width = max(len(s.get("repo") or NO_PROJECT) for _, s in rows)
+            out.append("  Inversions")
+            out += [_cut_line(f"    {text.ljust(width)}   {_where(s, repo_width)}") for text, s in rows]
+    out.append(f"  {CHECK_NOTE_LAST}")
+    return out
+
+
+def render_check(store: Store) -> str:
+    saved_rows = store.list_task_scores()
+    has_quality = [(key, saved) for key, saved in saved_rows if (saved.get("verdict") or {}).get("quality") is not None]
+    graded = {key: saved for key, saved in has_quality if _version(saved) >= RUBRIC_VERSION}
+    older = sum(_version(saved) < RUBRIC_VERSION for _, saved in has_quality)
+    keys = {key for key, _ in saved_rows} | {t.key for t in store.list_tasks()}
+    rated, unbound = _rated(store, keys)
+    out = [f"kaizen check-judge - {_noun(len(graded), 'graded task', 'graded tasks')} (rubric {RUBRIC_VERSION})"]
+    if older:
+        which = "grade from an earlier rubric was" if older == 1 else "grades from an earlier rubric were"
+        out.append(f"{older} older {which} left out.")
+    out += ["", *_ratings_section(rated, unbound, graded), "", *_evidence_section(graded)]
     return "\n".join(out)
