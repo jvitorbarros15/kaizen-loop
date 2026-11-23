@@ -8,13 +8,13 @@ from pathlib import Path
 
 from kaizen.record.model import RunRecord, Usage
 from kaizen.redact import find_secrets, redact_obj
-from kaizen.tasks import TaskSummary, summarise
+from kaizen.tasks import TaskSummary, summarise, task_key
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
 _SUSPECT = re.compile(r"\[REDACTED:[^\]]*\]|[A-Za-z0-9+_=-]{24,}")
 _SKIP_PREFIXES = ("toolu_", "srvtoolu_", "msg_", "req_")
 _HEX = re.compile(r"[0-9a-fA-F]+")
-_INSERT_TASK = "INSERT OR REPLACE INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+_INSERT_TASK = "INSERT OR REPLACE INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     session_id TEXT PRIMARY KEY, repo TEXT, started_at TEXT, ended_at TEXT,
@@ -28,8 +28,11 @@ CREATE TABLE IF NOT EXISTS human_grades (
 );
 CREATE TABLE IF NOT EXISTS tasks (
     session_id TEXT, idx INTEGER, repo TEXT, started_at TEXT, ended_at TEXT, title TEXT,
-    prompts INTEGER, tool_calls INTEGER, files_edited INTEGER, kind TEXT, last_test TEXT,
+    prompts INTEGER, tool_calls INTEGER, files_edited INTEGER, kind TEXT, last_test TEXT, key TEXT,
     PRIMARY KEY (session_id, idx)
+);
+CREATE TABLE IF NOT EXISTS task_scores (
+    key TEXT PRIMARY KEY, session_id TEXT, idx INTEGER, json TEXT, created_at TEXT
 );
 """
 
@@ -53,7 +56,7 @@ def _row(data: dict) -> tuple:
 def _task_rows(data: dict) -> list[tuple]:
     return [
         (t.session_id, t.index, t.repo, t.started_at, t.ended_at, t.title, t.prompts, t.tool_calls,
-         t.files_edited, t.kind, t.last_test)
+         t.files_edited, t.kind, t.last_test, task_key(t))
         for t in summarise(RunRecord.from_dict(data))
     ]
 
@@ -81,7 +84,14 @@ class Store:
         with contextlib.closing(self._connect()) as db:
             db.execute("PRAGMA journal_mode=WAL")
         with contextlib.closing(self._connect()) as db, db:
+            if db.execute("SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'key'").fetchone() is None:
+                db.execute("DROP TABLE IF EXISTS tasks")
+                stale = True
+            else:
+                stale = False
             db.executescript(_SCHEMA)
+        if stale and any(self.runs_dir.glob("*.json")):
+            self.rebuild_index()
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path, timeout=30)
@@ -168,7 +178,7 @@ class Store:
     def list_tasks(self, repo: str | None = None, limit: int | None = None) -> list[TaskSummary]:
         sql = (
             "SELECT session_id, idx, repo, started_at, ended_at, title, prompts, tool_calls, files_edited, kind, "
-            "last_test FROM tasks"
+            "last_test, key FROM tasks"
         )
         params: list = []
         if repo is not None:
@@ -180,6 +190,36 @@ class Store:
             params.append(limit)
         with contextlib.closing(self._connect()) as db, db:
             return [TaskSummary(*row) for row in db.execute(sql, params)]
+
+    def pending_task_scores(self, limit: int | None = None) -> list[TaskSummary]:
+        sql = (
+            "SELECT session_id, idx, repo, started_at, ended_at, title, prompts, tool_calls, files_edited, kind, "
+            "last_test, key FROM tasks WHERE kind IN ('edited_checked', 'edited_unchecked') "
+            "AND key NOT IN (SELECT key FROM task_scores) ORDER BY started_at DESC, session_id, idx DESC"
+        )
+        params: list = []
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        with contextlib.closing(self._connect()) as db, db:
+            return [TaskSummary(*row) for row in db.execute(sql, params)]
+
+    def save_task_score(self, key: str, session_id: str, idx: int, score: dict) -> None:
+        with contextlib.closing(self._connect()) as db, db:
+            db.execute(
+                "INSERT OR REPLACE INTO task_scores VALUES (?, ?, ?, ?, ?)",
+                (key, session_id, idx, json.dumps(redact_obj(score)), _now()),
+            )
+
+    def get_task_score(self, key: str) -> dict | None:
+        with contextlib.closing(self._connect()) as db, db:
+            row = db.execute("SELECT json FROM task_scores WHERE key = ?", (key,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def list_task_scores(self) -> list[tuple[str, dict]]:
+        with contextlib.closing(self._connect()) as db, db:
+            rows = db.execute("SELECT key, json FROM task_scores ORDER BY created_at DESC, rowid DESC").fetchall()
+        return [(key, json.loads(text)) for key, text in rows]
 
     def save_score(self, session_id: str, score: dict) -> None:
         with contextlib.closing(self._connect()) as db, db:
@@ -216,7 +256,7 @@ class Store:
             hits.extend((path.name, kind) for kind in dict.fromkeys(kinds))
         kinds: set[str] = set()
         with contextlib.closing(self._connect()) as db, db:
-            for table in ("runs", "scores", "human_grades", "tasks"):
+            for table in ("runs", "scores", "human_grades", "tasks", "task_scores"):
                 for row in db.execute(f"SELECT * FROM {table}"):
                     for value in row:
                         if isinstance(value, str):
@@ -230,7 +270,7 @@ class Store:
             suspects.extend((path.name, p) for p in _suspect_previews(path.read_text(encoding="utf-8"), []))
         seen: list[str] = []
         with contextlib.closing(self._connect()) as db, db:
-            for table in ("runs", "scores", "human_grades", "tasks"):
+            for table in ("runs", "scores", "human_grades", "tasks", "task_scores"):
                 for row in db.execute(f"SELECT * FROM {table}"):
                     for value in row:
                         if isinstance(value, str):

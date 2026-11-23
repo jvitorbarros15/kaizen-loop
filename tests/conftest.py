@@ -1,6 +1,9 @@
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
+
+from kaizen.record.model import RunRecord, ToolCall
 
 
 @pytest.fixture
@@ -36,5 +39,43 @@ def make_session():
         path = directory / f"{session_id}.jsonl"
         path.write_text("".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8")
         return path
+
+    return make
+
+
+@pytest.fixture
+def make_tasks():
+    def make(session_id="s1", tasks=(), repo="api-server", base=None, cwd="/home/dev/api-server"):
+        start = base or datetime(2026, 11, 22, 9, 0, tzinfo=UTC)
+
+        def stamp(moment):
+            return moment.isoformat().replace("+00:00", "Z")
+
+        prompts, times, calls = [], [], []
+        for i, spec in enumerate(tasks):
+            opened = start + timedelta(hours=2 * i)
+            for j, text in enumerate(spec["prompts"]):
+                prompts.append(text)
+                times.append(stamp(opened + timedelta(minutes=2 * j)))
+            minute = 10
+            for name in spec.get("files", ()):
+                tool_input = {"file_path": f"{cwd}/{name}", "old_string": "a", "new_string": f"b-{name}"}
+                calls.append(ToolCall(id=f"e{i}{minute}", name="Edit", input=tool_input,
+                                      timestamp=stamp(opened + timedelta(minutes=minute)), exit_code=0))
+                minute += 1
+            if spec.get("test") is not None:
+                calls.append(ToolCall(id=f"t{i}", name="Bash", input={"command": "pytest tests"},
+                                      timestamp=stamp(opened + timedelta(minutes=minute)),
+                                      exit_code=0 if spec["test"] else 1))
+        return RunRecord(
+            session_id=session_id,
+            cwd=cwd,
+            repo=repo,
+            started_at=times[0] if times else "",
+            ended_at=calls[-1].timestamp if calls else "",
+            user_messages=prompts,
+            user_message_times=times,
+            tool_calls=calls,
+        )
 
     return make
