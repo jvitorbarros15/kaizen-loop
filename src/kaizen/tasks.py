@@ -1,3 +1,4 @@
+import hashlib
 import re
 from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime
@@ -46,6 +47,7 @@ class TaskSummary:
     files_edited: int = 0
     kind: str = "no_edits"
     last_test: str = "none"
+    key: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -54,6 +56,13 @@ class TaskSummary:
     def from_dict(cls, d: dict) -> "TaskSummary":
         names = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in d.items() if k in names})
+
+
+def task_key(summary: TaskSummary) -> str:
+    text = (
+        f"{summary.session_id}|{summary.started_at}|{summary.ended_at}|{summary.tool_calls}|{summary.prompts}"
+    )
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass
