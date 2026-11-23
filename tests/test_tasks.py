@@ -385,3 +385,11 @@ def test_split_is_fast_on_a_huge_session():
     tasks = split_tasks(rec)
     assert time.perf_counter() - start < 1.0
     assert sum(len(t.tool_calls) for t in tasks) == 20000
+
+
+def test_request_starting_with_a_single_letter_word_is_not_a_confirmation():
+    from kaizen.tasks import GLUE
+
+    assert GLUE.match("a new feature for the app please") is None
+    assert GLUE.match("s3 bucket needs a lifecycle rule") is None
+    assert GLUE.match("sim, pode seguir") is not None
