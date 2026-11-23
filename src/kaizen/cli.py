@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 
 from kaizen import __version__
 from kaizen.config import load_config
+from kaizen.corrections import cached_groups, collect
 from kaizen.external import run_subprocess
 from kaizen.pipeline import (
     build_run_packet,
@@ -184,7 +185,11 @@ def cmd_refresh(args) -> int:
 
 
 def cmd_report(args) -> int:
-    say(render_report(Store(), args.last, args.days))
+    store = Store()
+    use_model = not args.no_model and load_config()["corrections"]["enabled"]
+    items = collect(scored_runs(store)[: args.last])
+    groups = cached_groups(store.root, items, RUNNER, use_model)
+    say(render_report(store, args.last, args.days, groups))
     return 0
 
 
@@ -390,6 +395,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="print the report")
     p.add_argument("--last", type=int, default=20)
     p.add_argument("--days", type=int, default=14)
+    p.add_argument("--no-model", action="store_true", help="group corrections by exact wording, no model call")
     p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("calibrate", help="grade runs blind and compare with the judge")
