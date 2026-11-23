@@ -1,4 +1,5 @@
 import contextlib
+import os
 import sqlite3
 import tempfile
 from dataclasses import asdict, fields
@@ -20,10 +21,15 @@ def find_transcripts(projects_dir: Path) -> list[Path]:
 
 
 def _in_temp_dir(cwd: str) -> bool:
-    def norm(p: str) -> str:
-        return p.replace(chr(92), "/").lower().rstrip("/")
+    def forms(p: str) -> set[str]:
+        # Windows hands out the temp folder in its short 8.3 form (RUNNER~1) while sessions record the long one.
+        both = {p, os.path.realpath(p)}
+        return {f.replace(chr(92), "/").lower().rstrip("/") + "/" for f in both}
 
-    return bool(cwd) and (norm(cwd) + "/").startswith(norm(tempfile.gettempdir()) + "/")
+    if not cwd:
+        return False
+    temps = forms(tempfile.gettempdir())
+    return any(c.startswith(t) for c in forms(cwd) for t in temps)
 
 
 def record_session(transcript: Path, store: Store, skip_temp: bool = False) -> str | None:
