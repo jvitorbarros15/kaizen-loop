@@ -14,9 +14,8 @@ TITLE_MIN_WORDS = 6
 NO_TITLE = "(no request text)"
 
 GLUE = re.compile(
-    r"^(sim|s|yes|y|ok|okay|pode|pode sim|pode seguir|segue|continua|continue|keep going|go|go ahead|vai|isso|"
-    r"certo|beleza|blz|fechado|aprovado|approved|merge|pode fazer|faz|do it|sure|yep|yeah|claro|perfeito|"
-    r"[0-9]|[a-d])\b",
+    r"^(sim|yes|ok|okay|pode|pode sim|pode seguir|segue|continua|continue|keep going|go|go ahead|vai|isso|"
+    r"certo|beleza|blz|fechado|aprovado|approved|merge|pode fazer|faz|do it|sure|yep|yeah|claro|perfeito)\b",
     re.IGNORECASE,
 )
 PASTED_ONLY = re.compile(r"^(\[pasted text, [\d,]+ characters\]\s*)+$")
