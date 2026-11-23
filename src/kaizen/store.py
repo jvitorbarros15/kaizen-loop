@@ -102,6 +102,9 @@ class Store:
     def _run_files(self) -> list[Path]:
         return sorted(p for p in self.runs_dir.iterdir() if p.is_file())
 
+    def _root_files(self) -> list[Path]:
+        return sorted(p for p in self.root.iterdir() if p.is_file() and p.suffix in (".log", ".json"))
+
     def save_run(self, record: RunRecord) -> None:
         data = redact_obj(record.to_dict())
         text = json.dumps(data, ensure_ascii=False, indent=2)
@@ -251,8 +254,8 @@ class Store:
 
     def audit(self) -> list[tuple[str, str]]:
         hits = []
-        for path in self._run_files():
-            kinds = find_secrets(path.read_text(encoding="utf-8"))
+        for path in [*self._run_files(), *self._root_files()]:
+            kinds = find_secrets(path.read_text(encoding="utf-8", errors="replace"))
             hits.extend((path.name, kind) for kind in dict.fromkeys(kinds))
         kinds: set[str] = set()
         with contextlib.closing(self._connect()) as db, db:
@@ -278,4 +281,4 @@ class Store:
         return suspects
 
     def file_count(self) -> int:
-        return len(list(self.runs_dir.glob("*.json"))) + 1
+        return len(list(self.runs_dir.glob("*.json"))) + len(self._root_files()) + 1

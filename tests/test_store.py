@@ -1,4 +1,5 @@
 import contextlib
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
@@ -364,3 +365,26 @@ def test_existing_database_without_tasks_table_gets_it(tmp_path):
     s = Store(tmp_path)
     s.save_run(task_record())
     assert len(task_rows(s)) == 2
+
+
+def test_audit_scans_log_and_json_files_in_the_store_root(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(make_record())
+    (tmp_path / "hook.log").write_text(f"2026-01-01 Error token {FAKE_GH}\n", encoding="utf-8")
+    (tmp_path / "correction-groups.json").write_text(json.dumps({"k": [{"label": FAKE_ANT}]}), encoding="utf-8")
+    (tmp_path / "other.txt").write_text(FAKE_GH, encoding="utf-8")
+    hits = s.audit()
+    assert ("hook.log", "github_token") in hits
+    assert any(name == "correction-groups.json" for name, _ in hits)
+    assert not any(name == "other.txt" for name, _ in hits)
+    assert not any(name.startswith("ledger.db") for name, _ in hits)
+
+
+def test_audit_of_clean_root_files_is_empty_and_file_count_includes_them(tmp_path):
+    s = Store(tmp_path)
+    assert s.file_count() == 1
+    (tmp_path / "hook.log").write_text("all fine\n", encoding="utf-8")
+    (tmp_path / "correction-groups.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "ledger.db-wal").write_bytes(b"\x00")
+    assert s.audit() == []
+    assert s.file_count() == 3

@@ -206,3 +206,22 @@ def test_corrupt_cache_is_ignored(tmp_path):
     fake = Fake(reply(GOOD))
     _, path = cached_groups(tmp_path, ITEMS, fake)
     assert path == "model" and len(fake.calls) == 1
+
+
+def test_cache_key_covers_only_what_the_model_is_sent(tmp_path):
+    from kaizen.corrections import MAX_CHARS, MAX_ITEMS
+
+    items = [(f"s{i}", f"correction number {i}") for i in range(MAX_ITEMS + 5)]
+    fake = Fake(reply([]))
+    assert cached_groups(tmp_path, items, fake)[1] == "model"
+    beyond = [*items[:-1], ("s9", "a different last note")]
+    assert cached_groups(tmp_path, beyond, fake)[1] == "cache"
+    inside = [*items[: MAX_ITEMS - 1], ("s9", "a different note"), *items[MAX_ITEMS:]]
+    assert cached_groups(tmp_path, inside, fake)[1] == "model"
+    assert len(fake.calls) == 2
+
+    long = [("a", "x" * MAX_CHARS + " tail one"), ("b", "y")]
+    cached_groups(tmp_path, long, fake)
+    cut = [("a", "x" * MAX_CHARS + " tail two"), ("b", "y")]
+    assert cached_groups(tmp_path, cut, fake)[1] == "cache"
+    assert len(fake.calls) == 3
