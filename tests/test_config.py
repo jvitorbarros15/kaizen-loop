@@ -23,3 +23,7 @@ def test_mutating_result_does_not_change_later_loads(tmp_path):
     cfg["judge"]["backends"].append("other")
     assert load_config(tmp_path) == DEFAULTS
     assert DEFAULTS["judge"]["backends"] == ["codex", "haiku"]
+
+
+def test_corrections_enabled_by_default(tmp_path):
+    assert load_config(tmp_path)["corrections"] == {"enabled": True}
