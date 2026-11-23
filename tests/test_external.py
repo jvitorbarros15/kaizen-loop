@@ -247,3 +247,56 @@ def test_run_subprocess_stdin_and_env():
     assert out.strip() == "hello|1"
     rc, out = run_subprocess([sys.executable, "-c", code])
     assert out.strip() == "|1"
+
+
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("KAIZEN_HOME", str(tmp_path / "home"))
+
+
+@pytest.fixture
+def external_log(tmp_path):
+    path = tmp_path / "home" / "external.log"
+
+    def lines():
+        return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+    return lines
+
+
+def test_failed_call_logs_program_exit_code_and_stderr(external_log):
+    code = "import sys; sys.stderr.write('boom\\nreason'); sys.exit(3)"
+    assert run_subprocess([sys.executable, "-c", code], None) == (3, "")
+    lines = external_log()
+    assert len(lines) == 1
+    assert sys.executable in lines[0]
+    assert " 3 " in lines[0]
+    assert "boom reason" in lines[0]
+    assert "-c" not in lines[0].split(sys.executable, 1)[1]
+
+
+def test_failed_call_log_redacts_secrets(external_log):
+    code = f"import sys; sys.stderr.write('token {SECRET}'); sys.exit(1)"
+    run_subprocess([sys.executable, "-c", code], None)
+    lines = external_log()
+    assert len(lines) == 1
+    assert SECRET not in lines[0]
+
+
+def test_failed_call_log_cuts_stderr(external_log):
+    code = "import sys; sys.stderr.write('a' * 1000); sys.exit(1)"
+    run_subprocess([sys.executable, "-c", code], None)
+    assert len(external_log()[0]) < 450
+
+
+def test_missing_binary_logs_one_line(external_log):
+    assert run_subprocess(["kaizen-no-such-binary-xyz", "secret-arg"], None) == (1, "")
+    lines = external_log()
+    assert len(lines) == 1
+    assert "kaizen-no-such-binary-xyz" in lines[0]
+    assert "secret-arg" not in lines[0]
+
+
+def test_successful_call_logs_nothing(external_log):
+    assert run_subprocess([sys.executable, "-c", "print('ok')"], None)[0] == 0
+    assert external_log() == []
