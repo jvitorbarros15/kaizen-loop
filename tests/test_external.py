@@ -300,3 +300,30 @@ def test_missing_binary_logs_one_line(external_log):
 def test_successful_call_logs_nothing(external_log):
     assert run_subprocess([sys.executable, "-c", "print('ok')"], None)[0] == 0
     assert external_log() == []
+
+
+def fake_items(*items):
+    def fake(argv, stdin):
+        return 0, json.dumps({"result": json.dumps(list(items))})
+
+    return fake
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    ["no correction", "No Correction here", "this is not a correction", "NOT AN EXPLICIT CORRECTION", "not explicitly a correction"],
+)
+def test_items_saying_they_are_not_corrections_are_dropped(phrase):
+    runner = fake_items("told it the test file was in the wrong folder", f"message 3: {phrase}", phrase)
+    assert extract_corrections(["do x", "y", "z"], runner) == ["told it the test file was in the wrong folder"]
+
+
+def test_only_non_corrections_leaves_empty_list():
+    assert extract_corrections(["do x", "thanks"], fake_items("message 2 is no correction")) == []
+
+
+def test_prompt_is_strict_about_what_counts():
+    text = PROMPT.lower()
+    assert "when unsure, leave it out" in text
+    assert "never output an item to say that something was not a correction" in text
+    assert "reminder" in text and "new request" in text
