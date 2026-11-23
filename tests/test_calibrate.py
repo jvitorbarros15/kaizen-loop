@@ -156,7 +156,7 @@ Asked later
           - also handle the logout page
           - [pasted text, 1,204 characters]
 Corrected - told the agent the test file was in the wrong folder
-Your grade 0-10 (Enter skips, q stops): """.replace("---", "───")
+Your grade 0-10 (Enter skips, q stops): """
 
 
 def full_session(store):
