@@ -95,7 +95,7 @@ def _project_block(name: str, runs: list[dict], width: int) -> list[str]:
     if totals:
         composite = f"composite {mean(totals):.1f} avg ({_plural(len(totals), 'run')} with a baseline)"
     elif any((r.get("score") or {}).get("baseline", "insufficient") != "insufficient" for r in runs):
-        composite = "composite: none, the judge was unavailable"
+        composite = "composite: none, no judge score"
     else:
         composite = f"composite: not enough runs for a baseline yet (needs {MIN_RUNS})"
     lines.append(f"{indent}{judged}   {composite}")

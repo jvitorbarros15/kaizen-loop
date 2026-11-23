@@ -102,7 +102,7 @@ def cmd_report(args) -> int:
     return 0
 
 
-def _show_for_grading(index: int, total: int, session_id: str, packet: dict, verdict: dict) -> None:
+def _show_for_grading(index: int, total: int, session_id: str, packet: dict) -> None:
     say(f"\n[{index}/{total}] {session_id}")
     say(f"Task: {packet['task']}")
     say(f"Changed files: {', '.join(packet['changed_files']) or 'none'}")
@@ -110,7 +110,12 @@ def _show_for_grading(index: int, total: int, session_id: str, packet: dict, ver
     for label, key in (("Tests", "test_runs"), ("Checks", "check_runs")):
         runs = [f"{r['command']} -> {outcome[r['passed']]}" for r in packet[key]]
         say(f"{label}: {'; '.join(runs) or 'none'}")
-    say("Judge reasons:")
+    for label, key in (("Later requests", "later_requests"), ("Corrections", "corrections")):
+        say(f"{label}: {'; '.join(packet.get(key) or []) or 'none'}")
+
+
+def _show_judge(verdict: dict) -> None:
+    say(f"Judge gave {verdict['quality']:.1f}")
     for reason in verdict.get("reasons") or []:
         say(f"  {reason}")
 
@@ -131,7 +136,7 @@ def cmd_calibrate(args) -> int:
         packet = built[0]
         if saved.get("corrections_known"):
             packet["corrections"] = saved["signals"].get("corrections") or []
-        _show_for_grading(index, len(todo), sid, packet, saved["verdict"])
+        _show_for_grading(index, len(todo), sid, packet)
         while True:
             try:
                 answer = read_line("Your grade 0-10 (blank or s skips, q stops): ").strip().lower()
@@ -145,6 +150,7 @@ def cmd_calibrate(args) -> int:
                 grade = -1.0
             if 0 <= grade <= 10:
                 store.save_human_grade(sid, grade)
+                _show_judge(saved["verdict"])
                 break
             say("Enter a number from 0 to 10.")
         if answer == "q":
