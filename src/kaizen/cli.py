@@ -144,7 +144,7 @@ def _score_line(session_id: str, saved: dict) -> str:
     score = saved["score"]
     total = "-" if score["total"] is None else f"{score['total']:.1f}"
     verdict = saved["verdict"]
-    backend = verdict["backend"] or "unavailable"
+    backend = verdict["backend"] or ("nothing to grade" if verdict.get("abstained") else "unavailable")
     if verdict.get("abstained"):
         backend += " (abstained)"
     return f"{session_id}  {total}  {score['strength']}  {score['evidence']}  {backend}"
@@ -245,7 +245,7 @@ def _clock(ended_at: datetime | None) -> str:
 def _show_for_grading(index: int, total: int, project: str, ended_at: datetime | None, packet: dict) -> None:
     calls = packet["counts"]["tool_calls"]
     header = f"[{index}/{total}]  {project}  ·  ended {_clock(ended_at)}  ·  {calls} tool call{'s' * (calls != 1)}"
-    say("─" * 60)
+    say("-" * 60)
     say(paint(_cut(header, SCREEN_WIDTH), "bold"))
     for line in _task_rows(packet["task"]):
         say(line)
