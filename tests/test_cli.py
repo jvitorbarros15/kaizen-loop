@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+from datetime import UTC, datetime
 
 import pytest
 
@@ -100,8 +101,9 @@ def test_report_and_refresh_on_empty_store(home, capsys):
 
 def test_calibrate_saves_blind_grades(home, tmp_path, capsys, monkeypatch, make_session):
     store = Store()
+    monkeypatch.setattr(cli, "now", lambda: datetime(2026, 11, 23, 12, 0, tzinfo=UTC))
     for sid in ("a", "b", "c"):
-        path = make_session(tmp_path / "projects" / "x", sid, prompts=[f"task {sid}"])
+        path = make_session(tmp_path / "projects" / "x", sid, prompts=[f"task {sid}"], started="2026-11-23")
         main(["record", "--transcript", str(path)])
         verdict = {"quality": 7.3, "reasons": ["did_what_was_asked: matched the ask"], "backend": "haiku"}
         store.save_score(sid, {"score": {"quality": 7.3}, "signals": {"test_runs": []}, "verdict": verdict, "corrections_known": False})
@@ -118,8 +120,8 @@ def test_calibrate_saves_blind_grades(home, tmp_path, capsys, monkeypatch, make_
     out = capsys.readouterr().out
     first, second, third = shown_before_grading
     assert "7.3" not in first and "matched the ask" not in first
-    assert "Judge gave 7.3" in second and "matched the ask" in second
-    assert "Judge gave" not in third and "matched the ask" not in third
+    assert "You 8.0   Judge 7.3" in second and "matched the ask" in second
+    assert "Judge 7.3" not in third and "matched the ask" not in third
     assert len(store.human_grades()) == 1
     assert store.human_grades()[0][1] == 8.0
     assert "Judge agrees with you on 1 of 1 runs" in out
