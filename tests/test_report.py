@@ -147,3 +147,14 @@ def test_no_repeated_corrections(tmp_path):
     store = Store(tmp_path / "store")
     store.save_score("a", make_score("p", "2026-11-10", tests="passed", corrections=["only once"]))
     assert "No correction was repeated" in render_report(store)
+
+
+def test_project_block_shows_pull_request_outcomes():
+    from kaizen.report import _project_block
+
+    def run(outcome):
+        return {"signals": {"pr_outcome": outcome}, "stats": {"waste_rate": 0.0}, "score": {}, "verdict": {}}
+
+    text = "\n".join(_project_block("api", [run("merged"), run("merged"), run("open"), run(None)], 6))
+    assert "pull requests: 2 merged, 1 open" in text
+    assert "pull requests" not in "\n".join(_project_block("api", [run(None)], 6))

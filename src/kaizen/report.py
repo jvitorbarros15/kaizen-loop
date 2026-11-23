@@ -78,6 +78,10 @@ def _project_block(name: str, runs: list[dict], width: int) -> list[str]:
         f"{indent}tokens {tokens:,.0f} per run   corrections {corrections}   "
         f"interruptions {_sum(runs, 'interruptions'):,}",
     ]
+    prs = Counter(_signals(r).get("pr_outcome") for r in runs if _signals(r).get("pr_outcome"))
+    if prs:
+        outcomes = ", ".join(f"{prs[s]} {s}" for s in ("merged", "open", "closed") if prs[s])
+        lines.append(f"{indent}pull requests: {outcomes}")
     qualities = [q for q in map(_quality, runs) if q is not None]
     abstained = sum(bool((r.get("verdict") or {}).get("abstained")) for r in runs)
     missing = len(runs) - len(qualities) - abstained
