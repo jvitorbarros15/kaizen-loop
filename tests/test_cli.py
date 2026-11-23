@@ -211,7 +211,13 @@ def test_calibrate_saves_blind_grades(home, tmp_path, capsys, monkeypatch, make_
         path = make_session(tmp_path / "projects" / "x", sid, prompts=[f"task {sid}"], started="2026-11-23")
         main(["record", "--transcript", str(path)])
         verdict = {"quality": 7.3, "reasons": ["did_what_was_asked: matched the ask"], "backend": "haiku"}
-        store.save_score(sid, {"score": {"quality": 7.3}, "signals": {"test_runs": []}, "verdict": verdict, "corrections_known": False})
+        summary = next(t for t in store.list_tasks() if t.session_id == sid)
+        saved = {
+            "verdict": verdict, "signals": {"test_runs": []}, "corrections_known": False, "session_id": sid,
+            "idx": 0, "repo": "x", "title": summary.title, "started_at": summary.started_at,
+            "ended_at": summary.ended_at, "tool_calls": summary.tool_calls, "files_edited": 0,
+        }
+        store.save_task_score(summary.key, sid, 0, saved)
     capsys.readouterr()
     answers = iter(["8", "s", "q"])
     shown_before_grading = []
