@@ -19,7 +19,8 @@ EXACT_NOTES = {
     "exact": "the model was not used",
     "exact (model call failed)": "the model call failed",
 }
-EXAMPLE_MAX = 70
+LINE_MAX = 110
+GROUPS_MAX = 8
 CHECK_NOTE = (
     "This counts tests, type checks, linters and builds the tool recognises; "
     "checking by eye in a browser is not seen."
@@ -306,11 +307,13 @@ def _correction_lines(groups: tuple[list[Group], str], graded: int) -> list[str]
     out = [_heading(f"What you keep correcting (grouped by meaning, from {_plural(graded, 'graded session')})")]
     rows = [f"  {g.count:>2}x in {_plural(g.sessions, 'session')}" for g in found]
     width = max((len(r) for r in rows), default=0) + 3
-    for row, g in zip(rows, found, strict=True):
+    room = LINE_MAX - width - len('e.g. ""')
+    for row, g in list(zip(rows, found, strict=True))[:GROUPS_MAX]:
         out.append(f"{row:<{width}}{g.label}")
-        if g.examples:
-            quoted = [f'"{e if len(e) <= EXAMPLE_MAX else e[: EXAMPLE_MAX - 3].rstrip() + "..."}"' for e in g.examples]
-            out.append(" " * width + "e.g. " + "  /  ".join(quoted))
+        for e in g.examples:
+            out.append(" " * width + f'e.g. "{e if len(e) <= room else e[: room - 3].rstrip() + "..."}"')
+    if len(found) > GROUPS_MAX:
+        out.append(f"  ... {len(found) - GROUPS_MAX} more")
     if not found:
         out.append("  No correction repeats yet.")
     if path in EXACT_NOTES:
