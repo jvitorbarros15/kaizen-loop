@@ -21,6 +21,7 @@ KEYS = {
     "verified_after_last_edit",
     "counts",
     "corrections",
+    "shipping_actions",
 }
 
 
@@ -362,3 +363,91 @@ def test_pasted_text_is_replaced_before_the_cut_and_never_reaches_the_packet():
 def test_message_without_pasted_tags_is_unchanged():
     packet = build_packet(make(messages=("plain <b>html</b> request",)), Signals())
     assert packet["task"] == "plain <b>html</b> request"
+
+
+def sh(command, exit_code=None, is_error=False, agent_id=None, name="Bash"):
+    return ToolCall(
+        id="t", name=name, input={"command": command}, exit_code=exit_code, is_error=is_error, agent_id=agent_id
+    )
+
+
+def actions(*calls):
+    return packet(make(calls))["shipping_actions"]
+
+
+@pytest.mark.parametrize(
+    "command,words",
+    [
+        ("git commit -m 'x'", "git commit"),
+        ("git merge feature", "git merge"),
+        ("git push origin main", "git push"),
+        ("git rebase main", "git rebase"),
+        ("git revert HEAD", "git revert"),
+        ("gh pr create --title t", "gh pr create"),
+        ("gh pr merge 12 --squash", "gh pr merge"),
+    ],
+)
+def test_shipping_action_for_each_command(command, words):
+    assert actions(sh(command, exit_code=0)) == [{"action": words, "ok": True}]
+
+
+def test_shipping_actions_empty_without_git():
+    assert actions(sh("ls -la", exit_code=0), edit("/home/someone/secretproj/a.py")) == []
+
+
+def test_shipping_actions_work_for_powershell():
+    assert actions(sh("git push", exit_code=1, name="PowerShell")) == [{"action": "git push", "ok": False}]
+
+
+def test_shipping_actions_main_agent_only():
+    assert actions(sh("git merge x", exit_code=0, agent_id="sub-1")) == []
+
+
+def test_shipping_ok_falls_back_to_is_error():
+    assert actions(sh("git push"), sh("git push", is_error=True)) == [
+        {"action": "git push", "ok": True},
+        {"action": "git push", "ok": False},
+    ]
+
+
+def test_shipping_ok_prefers_exit_code_over_is_error():
+    assert actions(sh("git commit -m x", exit_code=0, is_error=True)) == [{"action": "git commit", "ok": True}]
+
+
+def test_shipping_ok_null_when_piped_or_followed_by_other_commands():
+    assert actions(sh("git push 2>&1 | tail -3", exit_code=0)) == [{"action": "git push", "ok": None}]
+    assert actions(sh("git push || true", exit_code=0)) == [{"action": "git push", "ok": None}]
+    assert actions(sh("git push; echo done", exit_code=0)) == [{"action": "git push", "ok": None}]
+
+
+def test_shipping_ok_in_an_and_chain():
+    assert actions(sh("git add . && git commit -m x", exit_code=0)) == [{"action": "git commit", "ok": True}]
+    assert actions(sh("git commit -m x && git push", exit_code=0)) == [
+        {"action": "git commit", "ok": True},
+        {"action": "git push", "ok": True},
+    ]
+    assert actions(sh("git commit -m x && git push", exit_code=1)) == [
+        {"action": "git commit", "ok": None},
+        {"action": "git push", "ok": False},
+    ]
+
+
+def test_shipping_actions_keep_only_the_last_fifteen_in_order():
+    calls = [sh(f"git commit -m c{i}", exit_code=i % 2) for i in range(20)]
+    calls.insert(5, sh("git merge x", exit_code=0))
+    found = actions(*calls)
+    assert len(found) == 15
+    assert found[-1] == {"action": "git commit", "ok": False}
+    assert all(f["action"] == "git commit" for f in found)
+
+
+def test_shipping_actions_never_leak_the_command_line():
+    calls = [
+        sh("git commit -m 'fix the zebra-secret-thing'", exit_code=0),
+        sh("git push origin feature/very-private-branch", exit_code=0),
+        sh("gh pr create --title 'launch codenamed falcon' --body 'x'", exit_code=0),
+    ]
+    text = json.dumps(packet(make(calls)))
+    for leak in ("zebra-secret-thing", "very-private-branch", "falcon", "origin"):
+        assert leak not in text
+

@@ -37,6 +37,14 @@ CREATE TABLE IF NOT EXISTS task_scores (
 """
 
 
+def _grade_version(text: str) -> int:
+    try:
+        version = (json.loads(text).get("verdict") or {}).get("rubric_version")
+    except (ValueError, AttributeError):
+        return 1
+    return version if isinstance(version, int) and not isinstance(version, bool) else 1
+
+
 def kaizen_home() -> Path:
     env = os.environ.get("KAIZEN_HOME")
     home = Path(env) if env else Path.home() / ".kaizen"
@@ -194,18 +202,25 @@ class Store:
         with contextlib.closing(self._connect()) as db, db:
             return [TaskSummary(*row) for row in db.execute(sql, params)]
 
-    def pending_task_scores(self, limit: int | None = None) -> list[TaskSummary]:
+    def pending_task_scores(self, limit: int | None = None, rubric_version: int | None = None) -> list[TaskSummary]:
         sql = (
             "SELECT session_id, idx, repo, started_at, ended_at, title, prompts, tool_calls, files_edited, kind, "
             "last_test, key FROM tasks WHERE kind IN ('edited_checked', 'edited_unchecked') "
-            "AND key NOT IN (SELECT key FROM task_scores) ORDER BY started_at DESC, session_id, idx DESC"
+            "ORDER BY started_at DESC, session_id, idx DESC"
         )
-        params: list = []
-        if limit is not None:
-            sql += " LIMIT ?"
-            params.append(limit)
         with contextlib.closing(self._connect()) as db, db:
-            return [TaskSummary(*row) for row in db.execute(sql, params)]
+            rows = [TaskSummary(*row) for row in db.execute(sql)]
+        saved = {key: _grade_version(text) for key, text in self._score_texts()}
+        pending = [
+            t
+            for t in rows
+            if t.key not in saved or (rubric_version is not None and saved[t.key] < rubric_version)
+        ]
+        return pending if limit is None else pending[:limit]
+
+    def _score_texts(self) -> list[tuple[str, str]]:
+        with contextlib.closing(self._connect()) as db, db:
+            return db.execute("SELECT key, json FROM task_scores").fetchall()
 
     def save_task_score(self, key: str, session_id: str, idx: int, score: dict) -> None:
         with contextlib.closing(self._connect()) as db, db:
