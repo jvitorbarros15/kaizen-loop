@@ -15,11 +15,13 @@ from kaizen.corrections import cached_groups, collect
 from kaizen.external import run_subprocess
 from kaizen.pipeline import (
     build_run_packet,
+    build_task_packet,
     find_transcripts,
     record_session,
     refresh_pr_outcomes,
     run_end_times,
     score_run,
+    score_task,
     scored_runs,
 )
 from kaizen.redact import redact
@@ -144,14 +146,43 @@ def cmd_import(args) -> int:
     return 0
 
 
-def _score_line(session_id: str, saved: dict) -> str:
-    score = saved["score"]
-    total = "-" if score["total"] is None else f"{score['total']:.1f}"
-    verdict = saved["verdict"]
+def _backend_label(verdict: dict) -> str:
     backend = verdict["backend"] or ("nothing to grade" if verdict.get("abstained") else "unavailable")
     if verdict.get("abstained"):
         backend += " (abstained)"
+    return backend
+
+
+def _score_line(session_id: str, saved: dict) -> str:
+    score = saved["score"]
+    total = "-" if score["total"] is None else f"{score['total']:.1f}"
+    backend = _backend_label(saved["verdict"])
     return f"{session_id}  {total}  {score['strength']}  {score['evidence']}  {backend}"
+
+
+TASK_LINE_MAX = 110
+
+
+def _task_line(saved: dict) -> str:
+    started = _parse_time(saved.get("started_at"))
+    date = started.astimezone().strftime("%Y-%m-%d") if started else "unknown"
+    quality = saved["verdict"].get("quality")
+    prefix = (
+        f"{date}  {saved.get('repo') or '(no project)'}  "
+        f"{'-' if quality is None else f'{quality:.1f}'}  {_backend_label(saved['verdict'])}  "
+    )
+    return prefix + _cut(_flat(saved.get("title") or ""), max(TASK_LINE_MAX - len(prefix), 10))
+
+
+def _score_tasks(store: Store, config: dict, limit: int) -> int:
+    graded = 0
+    for summary in store.pending_task_scores(limit):
+        saved = score_task(summary.session_id, summary.index, store, config, RUNNER)
+        if saved is not None:
+            say(_task_line(saved))
+            graded += 1
+    say(f"Graded {graded} tasks ({len(store.pending_task_scores())} still pending)")
+    return 0
 
 
 def cmd_score(args) -> int:
@@ -161,14 +192,21 @@ def cmd_score(args) -> int:
         if not args.session_id:
             say("--show-packet needs a SESSION_ID")
             return 2
-        built = build_run_packet(args.session_id, store, config)
+        if args.task is not None:
+            built = build_task_packet(args.session_id, args.task, store, config)
+            missing = f"No task {args.task} in run {args.session_id}"
+        else:
+            built = build_run_packet(args.session_id, store, config)
+            missing = f"No run {args.session_id} in the store"
         if built is None:
-            say(f"No run {args.session_id} in the store")
+            say(missing)
             return 1
         packet, backends = built
         say(f"Backends that would be used: {', '.join(backends) or 'none'}")
         say(json.dumps(packet, indent=2))
         return 0
+    if args.tasks:
+        return _score_tasks(store, config, args.limit)
     ids = [args.session_id] if args.session_id else store.pending_scores()[: args.limit]
     for session_id in ids:
         saved = score_run(session_id, store, config, RUNNER)
@@ -387,6 +425,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pending", action="store_true")
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--show-packet", action="store_true")
+    p.add_argument("--tasks", action="store_true", help="grade pending tasks instead of sessions")
+    p.add_argument("--task", type=int, help="with --show-packet, show the packet of one task")
     p.set_defaults(func=cmd_score)
 
     p = sub.add_parser("refresh", help="refresh PR outcomes")
