@@ -5,7 +5,7 @@
 <h1 align="center">kaizen-loop</h1>
 
 <p align="center">
-  Self-improvement loops for coding agents, with cheap local decision models in the loop.
+  See where your coding agent wastes effort, then improve its skills with changes proven on a benchmark.
 </p>
 
 <p align="center">
