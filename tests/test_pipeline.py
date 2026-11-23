@@ -3,7 +3,6 @@ import json
 import pytest
 
 from kaizen.config import load_config
-from kaizen.external import PROMPT as CORRECTIONS_PROMPT
 from kaizen.judge.rubric import RUBRIC_ITEMS
 from kaizen.pipeline import (
     build_run_packet,
@@ -33,7 +32,7 @@ class FakeRunner:
         self.calls.append(argv[0])
         if argv[0] == "gh":
             return 0, json.dumps({"state": self.pr_state})
-        if argv[argv.index("--system-prompt") + 1] == CORRECTIONS_PROMPT:
+        if (stdin or "").startswith("<messages>"):
             if self.corrections is None:
                 return 1, ""
             return 0, json.dumps({"result": json.dumps(list(self.corrections))})
@@ -118,7 +117,7 @@ def test_corrections_failure_is_null_in_packet_and_unknown_in_score(make_session
     seen = []
 
     def runner(argv, stdin=None):
-        if "--system-prompt" in argv and argv[argv.index("--system-prompt") + 1] != CORRECTIONS_PROMPT:
+        if (stdin or "").startswith("<packet>"):
             seen.append(stdin)
         return FakeRunner(corrections=None)(argv, stdin)
 
