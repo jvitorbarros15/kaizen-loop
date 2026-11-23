@@ -127,13 +127,16 @@ def cmd_import(args) -> int:
         transcripts = transcripts[: args.limit]
     recorded = skipped = scratch = 0
     for path in transcripts:
-        if store.get_run(path.stem) is not None:
+        if not args.all and store.get_run(path.stem) is not None:
             skipped += 1
         elif record_session(path, store, skip_temp=True) is None:
             scratch += 1
         else:
             recorded += 1
-    line = f"Recorded {recorded} sessions ({skipped} already in the store)"
+    if args.all:
+        line = f"Re-recorded {recorded} sessions"
+    else:
+        line = f"Recorded {recorded} sessions ({skipped} already in the store)"
     if scratch:
         line += f"; skipped {scratch} run from temporary folders"
     say(line)
@@ -370,6 +373,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("import", help="record every transcript under the projects directory")
     p.add_argument("--limit", type=int)
+    p.add_argument("--all", action="store_true", help="re-record sessions already in the store")
     p.add_argument("--projects-dir", default=str(Path.home() / ".claude" / "projects"))
     p.set_defaults(func=cmd_import)
 

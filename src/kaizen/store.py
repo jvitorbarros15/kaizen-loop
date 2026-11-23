@@ -8,11 +8,13 @@ from pathlib import Path
 
 from kaizen.record.model import RunRecord, Usage
 from kaizen.redact import find_secrets, redact_obj
+from kaizen.tasks import TaskSummary, summarise
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
 _SUSPECT = re.compile(r"\[REDACTED:[^\]]*\]|[A-Za-z0-9+_=-]{24,}")
 _SKIP_PREFIXES = ("toolu_", "srvtoolu_", "msg_", "req_")
 _HEX = re.compile(r"[0-9a-fA-F]+")
+_INSERT_TASK = "INSERT OR REPLACE INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     session_id TEXT PRIMARY KEY, repo TEXT, started_at TEXT, ended_at TEXT,
@@ -23,6 +25,11 @@ CREATE TABLE IF NOT EXISTS scores (
 );
 CREATE TABLE IF NOT EXISTS human_grades (
     session_id TEXT PRIMARY KEY, grade REAL, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS tasks (
+    session_id TEXT, idx INTEGER, repo TEXT, started_at TEXT, ended_at TEXT, title TEXT,
+    prompts INTEGER, tool_calls INTEGER, files_edited INTEGER, kind TEXT, last_test TEXT,
+    PRIMARY KEY (session_id, idx)
 );
 """
 
@@ -41,6 +48,14 @@ def _now() -> str:
 def _row(data: dict) -> tuple:
     total = sum(Usage.from_dict(u).total for u in data["usage_by_model"].values())
     return (data["session_id"], data["repo"], data["started_at"], data["ended_at"], total, data["cost_usd"])
+
+
+def _task_rows(data: dict) -> list[tuple]:
+    return [
+        (t.session_id, t.index, t.repo, t.started_at, t.ended_at, t.title, t.prompts, t.tool_calls,
+         t.files_edited, t.kind, t.last_test)
+        for t in summarise(RunRecord.from_dict(data))
+    ]
 
 
 def _suspect_previews(text: str, seen: list[str]) -> list[str]:
@@ -90,19 +105,27 @@ class Store:
             tmp.unlink(missing_ok=True)
         with contextlib.closing(self._connect()) as db, db:
             db.execute("INSERT OR REPLACE INTO runs VALUES (?, ?, ?, ?, ?, ?)", _row(data))
+            db.execute("DELETE FROM tasks WHERE session_id = ?", (data["session_id"],))
+            db.executemany(_INSERT_TASK, _task_rows(data))
             if changed:
                 db.execute("DELETE FROM scores WHERE session_id = ?", (data["session_id"],))
 
     def rebuild_index(self) -> int:
         rows = []
+        task_rows = []
         for path in sorted(self.runs_dir.glob("*.json")):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-                rows.append(_row(data))
+                row = _row(data)
+                found = _task_rows(data)
             except (ValueError, KeyError, TypeError, AttributeError):
                 continue
+            rows.append(row)
+            task_rows.extend(found)
         with contextlib.closing(self._connect()) as db, db:
             db.execute("DELETE FROM runs")
+            db.execute("DELETE FROM tasks")
+            db.executemany(_INSERT_TASK, task_rows)
             db.executemany("INSERT OR REPLACE INTO runs VALUES (?, ?, ?, ?, ?, ?)", rows)
         return len(rows)
 
@@ -142,6 +165,22 @@ class Store:
                 runs.append(record)
         return runs
 
+    def list_tasks(self, repo: str | None = None, limit: int | None = None) -> list[TaskSummary]:
+        sql = (
+            "SELECT session_id, idx, repo, started_at, ended_at, title, prompts, tool_calls, files_edited, kind, "
+            "last_test FROM tasks"
+        )
+        params: list = []
+        if repo is not None:
+            sql += " WHERE repo = ?"
+            params.append(repo)
+        sql += " ORDER BY started_at DESC, session_id, idx DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        with contextlib.closing(self._connect()) as db, db:
+            return [TaskSummary(*row) for row in db.execute(sql, params)]
+
     def save_score(self, session_id: str, score: dict) -> None:
         with contextlib.closing(self._connect()) as db, db:
             db.execute(
@@ -177,7 +216,7 @@ class Store:
             hits.extend((path.name, kind) for kind in dict.fromkeys(kinds))
         kinds: set[str] = set()
         with contextlib.closing(self._connect()) as db, db:
-            for table in ("runs", "scores", "human_grades"):
+            for table in ("runs", "scores", "human_grades", "tasks"):
                 for row in db.execute(f"SELECT * FROM {table}"):
                     for value in row:
                         if isinstance(value, str):
@@ -191,7 +230,7 @@ class Store:
             suspects.extend((path.name, p) for p in _suspect_previews(path.read_text(encoding="utf-8"), []))
         seen: list[str] = []
         with contextlib.closing(self._connect()) as db, db:
-            for table in ("runs", "scores", "human_grades"):
+            for table in ("runs", "scores", "human_grades", "tasks"):
                 for row in db.execute(f"SELECT * FROM {table}"):
                     for value in row:
                         if isinstance(value, str):
