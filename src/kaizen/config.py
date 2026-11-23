@@ -8,6 +8,7 @@ DEFAULTS = {
     "score": {"quality": 0.4, "efficiency": 0.3, "cost": 0.3},
     "judge": {"backends": ["codex", "haiku"], "codex_repos": []},
     "budget": {"tokens_per_day": 2000000},
+    "corrections": {"enabled": True},
 }
 
 
