@@ -66,6 +66,7 @@ class RunRecord:
     usage_by_model: dict[str, Usage] = field(default_factory=dict)
     tool_calls: list[ToolCall] = field(default_factory=list)
     user_messages: list[str] = field(default_factory=list)
+    user_message_times: list[str] = field(default_factory=list)
     skills_used: list[str] = field(default_factory=list)
     pr_urls: list[str] = field(default_factory=list)
     cost_usd: float | None = None
@@ -73,7 +74,7 @@ class RunRecord:
     skipped_lines: int = 0
     interruptions: int = 0
     final_message: str = ""
-    schema_version: int = 1
+    schema_version: int = 2
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -92,6 +93,7 @@ class RunRecord:
             usage_by_model={k: Usage.from_dict(v) for k, v in (d.get("usage_by_model") or {}).items()},
             tool_calls=[ToolCall.from_dict(c) for c in d.get("tool_calls") or []],
             user_messages=list(d.get("user_messages") or []),
+            user_message_times=list(d.get("user_message_times") or []),
             skills_used=list(d.get("skills_used") or []),
             pr_urls=list(d.get("pr_urls") or []),
             cost_usd=d.get("cost_usd"),
