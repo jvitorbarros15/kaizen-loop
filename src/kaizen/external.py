@@ -3,7 +3,9 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable
+import tempfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from kaizen.redact import redact
@@ -65,6 +67,18 @@ def run_subprocess(argv: list[str], stdin: str | None = None) -> tuple[int, str]
         return 1, ""
 
 
+@contextmanager
+def claude_argv(instructions: str) -> Iterator[list[str]]:
+    workdir = tempfile.mkdtemp(prefix="kaizen-prompt-")
+    try:
+        path = os.path.join(workdir, "instructions.txt")
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(instructions)
+        yield [*CLAUDE_ARGV, "--system-prompt-file", path, POSITIONAL_PROMPT]
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def _loads(text: str) -> Any | None:
     try:
         return json.loads(text)
@@ -119,8 +133,8 @@ def _format_messages(user_messages: list[str]) -> str:
 def extract_corrections(user_messages: list[str], runner: Runner = run_subprocess) -> list[str] | None:
     if len(user_messages) < 2:
         return []
-    argv = [*CLAUDE_ARGV, "--system-prompt", PROMPT, POSITIONAL_PROMPT]
-    code, out = runner(argv, _format_messages(user_messages))
+    with claude_argv(PROMPT) as argv:
+        code, out = runner(argv, _format_messages(user_messages))
     if code != 0:
         return None
     parsed = parse_model_json(out)

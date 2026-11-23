@@ -5,7 +5,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
-from kaizen.external import CLAUDE_ARGV, POSITIONAL_PROMPT, Runner, parse_model_json, run_subprocess
+from kaizen.external import Runner, claude_argv, parse_model_json, run_subprocess
 from kaizen.judge.rubric import RUBRIC, RUBRIC_ITEMS, RUBRIC_VERSION
 
 MIN_SCORED = 3
@@ -86,13 +86,15 @@ def _packet_block(packet: dict) -> str:
     return "<packet>\n" + json.dumps(packet) + "\n</packet>"
 
 
-def _ask_haiku(packet: dict, runner: Runner) -> Any | None:
-    code, out = runner([*CLAUDE_ARGV, "--system-prompt", RUBRIC, POSITIONAL_PROMPT], _packet_block(packet))
-    return parse_model_json(out) if code == 0 else None
+def _ask_haiku(packet: dict, runner: Runner) -> tuple[bool, Any | None]:
+    with claude_argv(RUBRIC) as argv:
+        code, out = runner(argv, _packet_block(packet))
+    return code == 0, parse_model_json(out) if code == 0 else None
 
 
-def _ask_codex(packet: dict, runner: Runner) -> Any | None:
+def _ask_codex(packet: dict, runner: Runner) -> tuple[bool, Any | None]:
     workdir = tempfile.mkdtemp(prefix="kaizen-judge-")
+    out_path = os.path.join(workdir, "out.json")
     try:
         schema_path = os.path.join(workdir, "schema.json")
         with open(schema_path, "w", encoding="utf-8") as f:
@@ -107,18 +109,23 @@ def _ask_codex(packet: dict, runner: Runner) -> Any | None:
             "--output-schema",
             schema_path,
             "-o",
-            os.path.join(workdir, "out.json"),
+            out_path,
             "-",
         ]
         code, out = runner(argv, RUBRIC + "\n\n" + _packet_block(packet))
+        if code != 0:
+            return False, None
+        try:
+            with open(out_path, encoding="utf-8") as f:
+                return True, json.load(f)
+        except (OSError, ValueError):
+            pass
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
-    if code != 0:
-        return None
     try:
-        return json.loads(out)
+        return True, json.loads(out)
     except ValueError:
-        return None
+        return True, None
 
 
 _ASKERS = {"haiku": _ask_haiku, "codex": _ask_codex}
@@ -129,9 +136,13 @@ def judge(packet: dict, backends: list[str], runner: Runner = run_subprocess) ->
         ask = _ASKERS.get(backend)
         if ask is None:
             continue
-        items = _valid_items(ask(packet, runner))
-        if items is not None:
-            return _verdict(items, backend)
+        for _ in range(2):
+            ran, parsed = ask(packet, runner)
+            if not ran:
+                break
+            items = _valid_items(parsed)
+            if items is not None:
+                return _verdict(items, backend)
     return Verdict()
 
 

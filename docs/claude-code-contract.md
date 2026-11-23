@@ -224,3 +224,13 @@ Not met or not proven:
 - Not verified directly that managed (organisation) settings or hooks are skipped: `--setting-sources` only covers user, project and local sources, and the help text says managed settings still apply.
 - `--disable-slash-commands` is the only flag that targets skills; whether a user-level skill index is already excluded by `--setting-sources ""` alone was not isolated.
 - Not verified that the call is free of plugin loading beyond the token and answer evidence above.
+
+### Instructions in a file, not in argv
+
+Rule: session content and long instructions never go in argv. With `.CMD` shims cmd.exe cuts arguments at line breaks, and untrusted text in an argument could be interpreted by cmd.exe. This supersedes the `--system-prompt <instructions>` sentence above: the callers now pass `--system-prompt-file <path>`.
+
+- Observed (Claude Code 2.1.328, `claude.CMD` shim, scratch folder under the system temp dir, `KAIZEN_INTERNAL=1`): the earlier one-line rubric with single-quote JSON examples made Haiku return an invalid answer in 1 of 8 live calls, most likely copying the single quotes.
+- Observed: `--system-prompt-file <path>` is accepted together with the base argv and the short positional prompt. The file held four lines, including double quotes and a JSON snippet, with a marker word on the last line. The model repeated the marker word from the last line and quoted the second line exactly, so the whole multi-line file arrived intact. Exit 0, `is_error` false.
+- Observed: the multi-line rubric with a real double-quoted JSON example, passed through the file, gave 8 valid answers out of 8 on the first call (synthetic packet), mean cost about 0.00054 USD per call.
+- The file is created per call in a fresh temp directory and removed in a `finally`. No argv element of either caller contains a line break or a double quote; the data stays on stdin.
+- Not needed: the stdin `<instructions>` block fallback, since the file flag worked.
