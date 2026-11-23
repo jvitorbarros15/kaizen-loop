@@ -111,7 +111,7 @@ def test_report_on_hand_built_store(tmp_path):
     assert re.search(r"api-server\s+8 runs\s+tests: 5 passed, 1 failed, 1 unknown, 1 none\s+checks: 5 runs", text)
     assert "waste 4.0 per 100 calls (re-reads 14, retries 5, tool errors 5)" in text
     assert "tokens 61,000 per run   corrections 3   interruptions 1" in text
-    assert "judge quality 6.6 avg (7 graded, 1 unavailable)   composite 4.8 avg (6 runs with a baseline)" in text
+    assert "judge quality 6.6 avg (7 graded, 0 abstained, 1 unavailable)   composite 4.8 avg (6 runs with a baseline)" in text
     assert re.search(r"web-client\s+2 runs", text)
     assert re.search(r"\(no project\)\s+1 run\b", text)
     web = text.split("web-client")[1].split("\n\n")[0]

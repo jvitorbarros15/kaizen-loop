@@ -42,21 +42,28 @@ def cmd_import(args) -> int:
     transcripts = find_transcripts(Path(args.projects_dir))
     if args.limit is not None:
         transcripts = transcripts[: args.limit]
-    recorded = skipped = 0
+    recorded = skipped = scratch = 0
     for path in transcripts:
         if store.get_run(path.stem) is not None:
             skipped += 1
+        elif record_session(path, store, skip_temp=True) is None:
+            scratch += 1
         else:
-            record_session(path, store)
             recorded += 1
-    say(f"Recorded {recorded} sessions ({skipped} already in the store)")
+    line = f"Recorded {recorded} sessions ({skipped} already in the store)"
+    if scratch:
+        line += f"; skipped {scratch} run from temporary folders"
+    say(line)
     return 0
 
 
 def _score_line(session_id: str, saved: dict) -> str:
     score = saved["score"]
     total = "-" if score["total"] is None else f"{score['total']:.1f}"
-    backend = saved["verdict"]["backend"] if saved["verdict"]["quality"] is not None else "unavailable"
+    verdict = saved["verdict"]
+    backend = verdict["backend"] or "unavailable"
+    if verdict.get("abstained"):
+        backend += " (abstained)"
     return f"{session_id}  {total}  {score['strength']}  {score['evidence']}  {backend}"
 
 

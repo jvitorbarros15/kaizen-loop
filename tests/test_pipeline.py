@@ -164,3 +164,15 @@ def test_refresh_updates_open_pr_without_judge(make_session, store, tmp_path, co
     assert saved["signals"]["pr_outcome"] == "merged"
     assert saved["verdict"]["quality"] == 8.0
     assert refresh_pr_outcomes(store, runner) == 0
+
+
+def test_sessions_run_in_temp_folders_are_recognised():
+    import tempfile
+
+    from kaizen.pipeline import _in_temp_dir
+
+    inside = tempfile.gettempdir().upper() + "/scratch.AB12"
+    assert _in_temp_dir(inside) is True
+    assert _in_temp_dir(tempfile.gettempdir() + "-other/project") is False
+    assert _in_temp_dir("/home/dev/project") is False
+    assert _in_temp_dir("") is False

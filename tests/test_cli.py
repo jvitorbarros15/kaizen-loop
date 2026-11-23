@@ -113,3 +113,13 @@ def test_calibrate_saves_blind_grades(home, tmp_path, capsys, monkeypatch, make_
     assert len(store.human_grades()) == 1
     assert store.human_grades()[0][1] == 8.0
     assert "Judge agrees with you on 1 of 1 runs" in out
+
+
+def test_score_line_tells_abstained_from_unavailable():
+    from kaizen.cli import _score_line
+
+    score = {"total": None, "strength": "weak", "evidence": "none"}
+    abstained = {"score": score, "verdict": {"backend": "haiku", "quality": None, "abstained": True}}
+    missing = {"score": score, "verdict": {"backend": None, "quality": None, "abstained": False}}
+    assert _score_line("s1", abstained).endswith("haiku (abstained)")
+    assert _score_line("s1", missing).endswith("unavailable")
