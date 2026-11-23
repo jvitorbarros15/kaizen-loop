@@ -1,4 +1,6 @@
+import contextlib
 import json
+import sqlite3
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -35,6 +37,30 @@ def test_import_records_then_skips(home, tmp_path, make_session, capsys):
     assert "Recorded 2 sessions (0 already in the store)" in capsys.readouterr().out
     assert main(["import", "--projects-dir", str(projects)]) == 0
     assert "Recorded 0 sessions (2 already in the store)" in capsys.readouterr().out
+
+
+def test_import_all_rerecords(home, tmp_path, make_session, capsys):
+    projects = tmp_path / "projects"
+    make_session(projects / "a", "s1")
+    make_session(projects / "b", "s2")
+    main(["import", "--projects-dir", str(projects)])
+    capsys.readouterr()
+    store = Store()
+    with contextlib.closing(sqlite3.connect(store.db_path)) as db, db:
+        db.execute("DELETE FROM tasks")
+    assert main(["import", "--all", "--projects-dir", str(projects)]) == 0
+    assert "Re-recorded 2 sessions" in capsys.readouterr().out
+    assert len(store.list_tasks()) == 2
+
+
+def test_import_all_still_skips_temporary_folder_sessions(home, tmp_path, make_session, capsys):
+    projects = tmp_path / "projects"
+    make_session(projects / "a", "s1")
+    make_session(projects / "b", "s2", cwd=str(tmp_path / "scratch"))
+    assert main(["import", "--all", "--projects-dir", str(projects)]) == 0
+    out = capsys.readouterr().out
+    assert "Re-recorded 1 sessions" in out and "temporary folders" in out
+    assert Store().get_run("s2") is None
 
 
 def test_import_limit(home, tmp_path, make_session, capsys):

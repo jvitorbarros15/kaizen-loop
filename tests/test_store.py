@@ -1,5 +1,6 @@
 import contextlib
 import sqlite3
+from datetime import UTC, datetime, timedelta
 
 from kaizen.record.model import RunRecord, ToolCall, Usage
 from kaizen.redact import redact_obj
@@ -255,3 +256,111 @@ def test_audit_suspects_scans_ledger(tmp_path):
     s.save_run(make_record())
     s.save_score("s1", {"reasons": ["saw Zx9kQ2mP7vLr4TnW8bYc3HdJ in output"]})
     assert s.audit_suspects() == [("ledger.db", "Zx9k…(24 chars)")]
+
+
+LONG_ASK = "please change the parser so it handles empty files"
+
+
+def task_record(session_id="s1", minute0=0, secret=None, **overrides):
+    def when(m):
+        return (datetime(2026, 1, 1, 10, 0, tzinfo=UTC) + timedelta(minutes=m)).isoformat()
+
+    first = LONG_ASK if secret is None else f"{LONG_ASK} {secret}"
+    fields = {
+        "session_id": session_id,
+        "started_at": when(minute0),
+        "user_messages": [first, "now also update the docs for the parser change"],
+        "user_message_times": [when(minute0), when(minute0 + 100)],
+        "tool_calls": [
+            ToolCall(
+                id="e1",
+                name="Edit",
+                input={"file_path": "/w/a.py", "old_string": "a", "new_string": "b"},
+                timestamp=when(minute0 + 1),
+                exit_code=0,
+            )
+        ],
+    }
+    fields.update(overrides)
+    return make_record(**fields)
+
+
+def task_rows(s):
+    with contextlib.closing(sqlite3.connect(s.db_path)) as db, db:
+        return db.execute("SELECT session_id, idx, kind, title FROM tasks ORDER BY session_id, idx").fetchall()
+
+
+def test_save_run_writes_task_rows(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(task_record())
+    assert task_rows(s) == [
+        ("s1", 0, "edited_unchecked", LONG_ASK),
+        ("s1", 1, "no_edits", "now also update the docs for the parser change"),
+    ]
+
+
+def test_resave_replaces_task_rows(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(task_record())
+    s.save_run(task_record(user_messages=[LONG_ASK], user_message_times=[task_record().user_message_times[0]]))
+    assert [(r[0], r[1]) for r in task_rows(s)] == [("s1", 0)]
+    s.save_run(task_record("s2"))
+    assert len(task_rows(s)) == 3
+
+
+def test_list_tasks_newest_first_with_filter_and_limit(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(task_record("a", minute0=0, repo="acme/app"))
+    s.save_run(task_record("b", minute0=1000, repo="acme/other"))
+    s.save_run(task_record("c", minute0=2000, repo="acme/app"))
+    got = s.list_tasks()
+    assert [(t.session_id, t.index) for t in got] == [("c", 1), ("c", 0), ("b", 1), ("b", 0), ("a", 1), ("a", 0)]
+    starts = [t.started_at for t in got]
+    assert starts == sorted(starts, reverse=True)
+    assert {t.session_id for t in s.list_tasks(repo="acme/app")} == {"a", "c"}
+    assert len(s.list_tasks(limit=3)) == 3
+    assert len(s.list_tasks(repo="acme/other", limit=5)) == 2
+    first = s.list_tasks(repo="acme/other")[-1]
+    assert (first.kind, first.files_edited, first.repo, first.prompts, first.tool_calls) == ("edited_unchecked", 1, "acme/other", 1, 1)
+
+
+def test_secret_in_prompt_never_reaches_tasks_table(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(task_record(secret=FAKE_GH))
+    with contextlib.closing(sqlite3.connect(s.db_path)) as db, db:
+        titles = [r[0] for r in db.execute("SELECT title FROM tasks")]
+    assert titles and all("ghp_0123456789" not in t for t in titles)
+    assert b"ghp_0123456789" not in blob(tmp_path)
+    assert s.audit() == []
+
+
+def test_rebuild_index_restores_task_rows(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(task_record("a"))
+    s.save_run(task_record("b", minute0=500))
+    before = task_rows(s)
+    with contextlib.closing(sqlite3.connect(s.db_path)) as db, db:
+        db.execute("DELETE FROM tasks")
+        db.execute("INSERT INTO tasks (session_id, idx) VALUES ('ghost', 0)")
+    s.rebuild_index()
+    assert task_rows(s) == before
+
+
+def test_audit_covers_tasks_table(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(task_record())
+    with contextlib.closing(sqlite3.connect(s.db_path)) as db, db:
+        db.execute("UPDATE tasks SET title = ? WHERE idx = 0", (FAKE_GH,))
+    assert ("ledger.db", "github_token") in s.audit()
+    with contextlib.closing(sqlite3.connect(s.db_path)) as db, db:
+        db.execute("UPDATE tasks SET title = ? WHERE idx = 0", ("id Zx9kQ2mP7vLr4TnW8bYc3HdJ end",))
+    assert ("ledger.db", "Zx9k…(24 chars)") in s.audit_suspects()
+
+
+def test_existing_database_without_tasks_table_gets_it(tmp_path):
+    Store(tmp_path)
+    with contextlib.closing(sqlite3.connect(tmp_path / "ledger.db")) as db, db:
+        db.execute("DROP TABLE tasks")
+    s = Store(tmp_path)
+    s.save_run(task_record())
+    assert len(task_rows(s)) == 2
