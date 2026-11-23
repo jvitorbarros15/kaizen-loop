@@ -114,6 +114,14 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "cli_flag",
         re.compile(
+            r"""(?<![\w-])(?:-u[ \t]*|--user[ \t=]+)(?P<q>["'])(?![0-9]+:)[^\s:="'\\]+:"""
+            + _NOT_MARKER
+            + r"""(?P<secret>(?:(?!(?P=q))[^\\\r\n])+)(?=(?P=q))"""
+        ),
+    ),
+    (
+        "cli_flag",
+        re.compile(
             r"""(?<![\w-])(?:-u(?:[ \t]+|(?=[^\s=-]))|--user[ \t=]+)["']?(?![0-9]+:)"""
             r"""[^\s:="'\\]+:""" + _NOT_MARKER + r"""(?P<secret>[^\s"'\\]+)"""
         ),

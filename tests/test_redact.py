@@ -506,3 +506,20 @@ def test_kind_order_is_stable():
         "DB_PASSWORD=dev123 https://s.test/?sig=abc pypi-AgEI" + "FAKEfake0123_-" * 5
     )
     assert find_secrets(text) == ["pypi_token", "url_signature", "env_assignment"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'curl -u "user:pass word" https://x.test',
+        "curl -u 'admin:Hunter2 Hunter2' https://x.test",
+        'curl --user "admin:two words here" https://x.test',
+        'curl -u"admin:pass word" https://x.test',
+    ],
+)
+def test_quoted_user_password_with_spaces_is_redacted_to_the_closing_quote(text):
+    out = redact(text)
+    assert "word" not in out and "Hunter2" not in out
+    assert out.count("[REDACTED:cli_flag]") == 1
+    assert out.endswith(" https://x.test")
+    assert redact(out) == out
