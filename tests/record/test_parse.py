@@ -442,7 +442,7 @@ def test_excerpt_only_for_shell_or_errors(tmp_path):
     assert calls["ps"].output_excerpt == "out2"
     assert calls["e"].output_excerpt == "Error: nope"
     assert calls["m"].output_excerpt == ""
-    assert calls["r"].exit_code == 0
+    assert calls["r"].exit_code is None
 
 
 def test_exit_code_computed_from_full_text_even_when_excerpt_empty(tmp_path):
@@ -450,7 +450,7 @@ def test_exit_code_computed_from_full_text_even_when_excerpt_empty(tmp_path):
         assistant("a", [tool_use("t1", "Read")]),
         result("t1", "Exit code 4\n" + "z" * 9000, is_error=True),
     ])
-    assert parse_transcript(p).tool_calls[0].exit_code == 4
+    assert parse_transcript(p).tool_calls[0].exit_code is None
 
 
 def test_input_allowlist_drops_unknown_keys(tmp_path):
@@ -588,3 +588,52 @@ def test_subagent_final_message_does_not_contribute(tmp_path):
         [assistant("s", [text_block("sub done")], timestamp="2026-01-01T10:09:00Z")],
     )
     assert parse_session(p).final_message == "parent done"
+
+
+@pytest.mark.parametrize("name,expected", [("Bash", 0), ("PowerShell", 0), ("Read", None), ("Edit", None), ("Write", None), ("Agent", None)])
+def test_exit_code_only_for_shell_tools(tmp_path, name, expected):
+    p = write(tmp_path, [assistant("a", [tool_use("t1", name)]), result("t1", "ok")])
+    assert parse_transcript(p).tool_calls[0].exit_code == expected
+
+
+def test_same_message_id_keeps_largest_value_per_field(tmp_path):
+    u1 = {"input_tokens": 100, "cache_creation_input_tokens": 7, "cache_read_input_tokens": 0, "output_tokens": 5}
+    u2 = {"input_tokens": 10, "output_tokens": 50}
+    p = write(tmp_path, [
+        assistant("same", [], u1, model="m1"),
+        assistant("same", [], u2, model=""),
+    ])
+    u = parse_transcript(p).usage_by_model["m1"]
+    assert (u.input, u.cache_write, u.cache_read, u.output) == (100, 7, 0, 50)
+
+
+def test_timestamps_compare_as_times_not_strings(tmp_path):
+    early = "2026-01-01T12:00:00+02:00"
+    late = "2026-01-01T10:30:00Z"
+    p = write(tmp_path, [
+        assistant("a", [tool_use("t1")], timestamp=late),
+        assistant("b", [tool_use("t2")], timestamp=early),
+    ])
+    r = parse_transcript(p)
+    assert (r.started_at, r.ended_at) == (early, late)
+
+
+def test_subagent_merge_order_compares_times(tmp_path):
+    p = sub_session(
+        tmp_path,
+        [assistant("p1", [tool_use("tp")], timestamp="2026-01-01T10:30:00Z")],
+        [assistant("s1", [tool_use("ts")], timestamp="2026-01-01T12:00:00+02:00")],
+    )
+    r = parse_session(p)
+    assert [c.id for c in r.tool_calls] == ["ts", "tp"]
+    assert (r.started_at, r.ended_at) == ("2026-01-01T12:00:00+02:00", "2026-01-01T10:30:00Z")
+
+
+def test_unparseable_timestamp_sorts_after_parseable_and_never_raises(tmp_path):
+    p = write(tmp_path, [
+        assistant("a", [tool_use("t1")], timestamp="garbage"),
+        assistant("b", [tool_use("t2")], timestamp="2026-01-01T10:00:00"),
+        assistant("c", [tool_use("t3")], timestamp="2026-01-01T09:00:00Z"),
+    ])
+    r = parse_transcript(p)
+    assert (r.started_at, r.ended_at) == ("2026-01-01T09:00:00Z", "garbage")
