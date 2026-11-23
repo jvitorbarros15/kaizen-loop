@@ -38,12 +38,33 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _row(data: dict) -> tuple:
+    total = sum(Usage.from_dict(u).total for u in data["usage_by_model"].values())
+    return (data["session_id"], data["repo"], data["started_at"], data["ended_at"], total, data["cost_usd"])
+
+
+def _suspect_previews(text: str, seen: list[str]) -> list[str]:
+    previews = []
+    for m in _SUSPECT.finditer(text):
+        token = m.group()
+        if token.startswith(("[", *_SKIP_PREFIXES)) or _HEX.fullmatch(token):
+            continue
+        if not (re.search(r"[a-z]", token) and re.search(r"[A-Z]", token) and re.search(r"[0-9]", token)):
+            continue
+        if token not in seen:
+            seen.append(token)
+            previews.append(f"{token[:4]}…({len(token)} chars)")
+    return previews
+
+
 class Store:
     def __init__(self, root: Path | None = None):
         self.root = Path(root) if root is not None else kaizen_home()
         self.runs_dir = self.root / "runs"
         self.runs_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "ledger.db"
+        with contextlib.closing(self._connect()) as db:
+            db.execute("PRAGMA journal_mode=WAL")
         with contextlib.closing(self._connect()) as db, db:
             db.executescript(_SCHEMA)
 
@@ -58,26 +79,40 @@ class Store:
 
     def save_run(self, record: RunRecord) -> None:
         data = redact_obj(record.to_dict())
-        total = sum(Usage.from_dict(u).total for u in data["usage_by_model"].values())
+        text = json.dumps(data, ensure_ascii=False, indent=2)
         path = self._run_path(data["session_id"])
+        changed = path.exists() and path.read_text(encoding="utf-8") != text
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         try:
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.write_text(text, encoding="utf-8")
             os.replace(tmp, path)
         finally:
             tmp.unlink(missing_ok=True)
         with contextlib.closing(self._connect()) as db, db:
-            db.execute(
-                "INSERT OR REPLACE INTO runs VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    data["session_id"],
-                    data["repo"],
-                    data["started_at"],
-                    data["ended_at"],
-                    total,
-                    data["cost_usd"],
-                ),
-            )
+            db.execute("INSERT OR REPLACE INTO runs VALUES (?, ?, ?, ?, ?, ?)", _row(data))
+            if changed:
+                db.execute("DELETE FROM scores WHERE session_id = ?", (data["session_id"],))
+
+    def rebuild_index(self) -> int:
+        rows = []
+        for path in sorted(self.runs_dir.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                rows.append(_row(data))
+            except (ValueError, KeyError, TypeError, AttributeError):
+                continue
+        with contextlib.closing(self._connect()) as db, db:
+            db.execute("DELETE FROM runs")
+            db.executemany("INSERT OR REPLACE INTO runs VALUES (?, ?, ?, ?, ?, ?)", rows)
+        return len(rows)
+
+    def pending_scores(self) -> list[str]:
+        sql = (
+            "SELECT session_id FROM runs WHERE session_id NOT IN (SELECT session_id FROM scores) "
+            "ORDER BY started_at DESC, session_id"
+        )
+        with contextlib.closing(self._connect()) as db, db:
+            return [row[0] for row in db.execute(sql)]
 
     def get_run(self, session_id: str) -> RunRecord | None:
         path = self._run_path(session_id)
@@ -153,18 +188,14 @@ class Store:
     def audit_suspects(self) -> list[tuple[str, str]]:
         suspects = []
         for path in self._run_files():
-            seen: list[str] = []
-            for m in _SUSPECT.finditer(path.read_text(encoding="utf-8")):
-                token = m.group()
-                if token.startswith(("[", *_SKIP_PREFIXES)) or _HEX.fullmatch(token):
-                    continue
-                if not (
-                    re.search(r"[a-z]", token) and re.search(r"[A-Z]", token) and re.search(r"[0-9]", token)
-                ):
-                    continue
-                if token not in seen:
-                    seen.append(token)
-                    suspects.append((path.name, f"{token[:4]}…({len(token)} chars)"))
+            suspects.extend((path.name, p) for p in _suspect_previews(path.read_text(encoding="utf-8"), []))
+        seen: list[str] = []
+        with contextlib.closing(self._connect()) as db, db:
+            for table in ("runs", "scores", "human_grades"):
+                for row in db.execute(f"SELECT * FROM {table}"):
+                    for value in row:
+                        if isinstance(value, str):
+                            suspects.extend(("ledger.db", p) for p in _suspect_previews(value, seen))
         return suspects
 
     def file_count(self) -> int:
