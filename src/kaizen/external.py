@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import re
@@ -6,9 +7,11 @@ import subprocess
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from typing import Any
 
 from kaizen.redact import redact
+from kaizen.store import kaizen_home
 
 Runner = Callable[[list[str], str | None], tuple[int, str]]
 
@@ -46,10 +49,19 @@ _FENCE = re.compile(r"```[A-Za-z]*\s*(.*?)```", re.DOTALL)
 _STATES = {"MERGED": "merged", "CLOSED": "closed", "OPEN": "open"}
 
 
+def _log_failure(program: str, reason: str, stderr: str = "") -> None:
+    with contextlib.suppress(Exception):
+        detail = " ".join(redact(stderr).split())[:300]
+        line = f"{datetime.now(UTC).isoformat()} {program} {reason} {detail}\n"
+        with open(kaizen_home() / "external.log", "a", encoding="utf-8") as f:
+            f.write(line)
+
+
 def run_subprocess(argv: list[str], stdin: str | None = None) -> tuple[int, str]:
     try:
         exe = shutil.which(argv[0])
         if exe is None:
+            _log_failure(argv[0], "not found")
             return 1, ""
         proc = subprocess.run(
             [exe, *argv[1:]],
@@ -62,8 +74,11 @@ def run_subprocess(argv: list[str], stdin: str | None = None) -> tuple[int, str]
             timeout=120,
             env={**os.environ, "KAIZEN_INTERNAL": "1"},
         )
+        if proc.returncode != 0:
+            _log_failure(argv[0], str(proc.returncode), proc.stderr)
         return proc.returncode, proc.stdout
-    except (OSError, ValueError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        _log_failure(argv[0], type(exc).__name__)
         return 1, ""
 
 
