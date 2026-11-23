@@ -30,27 +30,39 @@ def clock(hours_ago):
     return (NOW - timedelta(hours=hours_ago)).astimezone().strftime("%H:%M")
 
 
-def seed(store, sid, hours_ago=1.0, quality=4.4, messages=("Fix the login redirect",), calls=(), corrections=None, reasons=None):
+def seed(store, sid, hours_ago=1.0, quality=4.4, messages=("Fix the login redirect",), calls=(), corrections=None, reasons=None, started_hours=None):
     record = RunRecord(
         session_id=sid,
         cwd="/home/dev/api-server",
         repo="api-server",
-        started_at=iso(hours_ago + 1),
+        started_at=iso(started_hours or hours_ago + 1),
         ended_at=iso(hours_ago),
         user_messages=list(messages),
         tool_calls=list(calls),
     )
     store.save_run(record)
     verdict = {"quality": quality, "reasons": reasons or [], "backend": "haiku", "abstained": quality is None}
+    summary = next(t for t in store.list_tasks() if t.session_id == sid)
     saved = {
-        "score": {"total": 5.0},
-        "signals": {"corrections": corrections or []},
         "verdict": verdict,
+        "signals": {"corrections": corrections or []},
         "corrections_known": corrections is not None,
+        "session_id": sid,
+        "idx": summary.index,
         "repo": "api-server",
-        "started_at": record.started_at,
+        "title": summary.title,
+        "kind": summary.kind,
+        "last_test": summary.last_test,
+        "started_at": summary.started_at,
+        "ended_at": summary.ended_at,
+        "tool_calls": summary.tool_calls,
+        "files_edited": summary.files_edited,
     }
-    store.save_score(sid, saved)
+    store.save_task_score(summary.key, sid, summary.index, saved)
+
+
+def key_of(store, sid):
+    return next(t.key for t in store.list_tasks() if t.session_id == sid)
 
 
 def edit(path):
@@ -80,7 +92,7 @@ def test_offers_only_recent_ungraded_scored_runs_newest_first(home, monkeypatch,
     seed(store, "newer", hours_ago=1, messages=("task newer",))
     seed(store, "graded", hours_ago=2, messages=("task graded",))
     seed(store, "abstained", hours_ago=2, quality=None, messages=("task abstained",))
-    store.save_human_grade("graded", 5.0)
+    store.save_human_grade(key_of(store, "graded"), 5.0)
     seen = []
 
     def read_line(prompt):
@@ -105,11 +117,7 @@ def test_hours_option_widens_the_window(home, monkeypatch, capsys):
 
 def test_window_uses_end_time_not_start_time(home, monkeypatch, capsys):
     store = Store()
-    seed(store, "long", hours_ago=1, messages=("task long",))
-    record = store.get_run("long")
-    record.started_at = iso(200)
-    store.save_run(record)
-    store.save_score("long", {"verdict": {"quality": 4.0}, "signals": {}, "started_at": iso(200)})
+    seed(store, "long", hours_ago=1, messages=("task long",), started_hours=200)
     grade_with(monkeypatch, ["s"])
     main(["calibrate"])
     assert "task long" in capsys.readouterr().out
@@ -134,20 +142,20 @@ def test_nothing_recent_says_so_then_summary(home, monkeypatch, capsys):
     monkeypatch.setattr(cli, "read_line", boom)
     assert main(["calibrate", "--hours", "24"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert "last 24 hours" in lines[0]
-    assert "kaizen score --pending" in lines[0]
+    assert "No graded task ended in the last 24 hours" in lines[0]
+    assert "kaizen score --tasks" in lines[0]
     assert lines[1] == ""
     assert "nothing to compare yet" in lines[2]
 
 
 def test_empty_store_says_nothing_recent(home, monkeypatch, capsys):
     assert main(["calibrate"]) == 0
-    assert "kaizen score --pending" in capsys.readouterr().out
+    assert "kaizen score --tasks" in capsys.readouterr().out
 
 
 FULL_SCREEN = """\
 ------------------------------------------------------------
-[1/1]  api-server  ·  ended {ended}  ·  5 tool calls
+[1/1]  api-server  ·  ended {ended}  ·  5 tool calls  ·  2 files
 Task      Fix the login redirect so it keeps the query string
 Files     redirect.py, test_redirect.py
 Tests     3 runs: 2 passed, 1 failed  (last: passed)
@@ -207,6 +215,7 @@ def test_comparison_line_and_compact_reasons_after_grade(home, monkeypatch, caps
     assert lines[1] == "  did_what_was_asked    edits match the requested order, but merge and publish are unverified"
     assert lines[2] == "  verified_before_done  no test or check runs were recorded"
     assert Store().human_grades()[0][1] == 8.0
+    assert Store().human_grades()[0][0] == key_of(Store(), "s1")
 
 
 def test_long_reason_cut_to_90(home, monkeypatch, capsys):
@@ -287,7 +296,7 @@ def test_screen_limits(home, monkeypatch, capsys):
             break
         task_lines.append(ln)
     assert len(task_lines) == 2
-    assert task_lines[1].endswith("...")
+    assert not task_lines[1].endswith("...")
     later = [ln for ln in lines if ln.startswith("          - later request")]
     assert len(later) == 3
     assert "          +3 more" in lines
@@ -404,3 +413,57 @@ def test_small_difference_is_not_red(home, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "\x1b[31m" not in out
     assert "difference 1.0" in out
+
+
+def test_task_that_grew_since_grading_is_not_offered(home, monkeypatch, capsys):
+    store = Store()
+    seed(store, "grown", hours_ago=2, calls=[edit("/home/dev/api-server/a.py")])
+    record = store.get_run("grown")
+    record.tool_calls.append(bash("pytest", 0))
+    store.save_run(record)
+    prompts = grade_with(monkeypatch, [])
+    assert main(["calibrate"]) == 0
+    assert prompts == []
+    assert "No graded task ended" in capsys.readouterr().out
+
+
+def test_header_counts_files_and_singular_call(home, monkeypatch, capsys):
+    seed(Store(), "s1", calls=[edit("/home/dev/api-server/a.py")])
+    shown = []
+
+    def read_line(prompt):
+        shown.append(capsys.readouterr().out)
+        return "s"
+
+    monkeypatch.setattr(cli, "read_line", read_line)
+    main(["calibrate"])
+    assert f"[1/1]  api-server  ·  ended {clock(1)}  ·  1 tool call  ·  1 file" in shown[0]
+
+
+def test_task_shows_its_title_and_the_other_prompts_under_asked_later(home, monkeypatch, capsys):
+    seed(Store(), "s1", messages=("ok", "migrate the session table to the new schema today", "and the audit table"))
+    shown = []
+
+    def read_line(prompt):
+        shown.append(capsys.readouterr().out)
+        return "s"
+
+    monkeypatch.setattr(cli, "read_line", read_line)
+    main(["calibrate"])
+    lines = shown[0].splitlines()
+    assert "Task      migrate the session table to the new schema today" in lines
+    assert lines[lines.index("Asked later") + 1 : lines.index("Asked later") + 3] == [
+        "          - ok",
+        "          - and the audit table",
+    ]
+
+
+def test_summary_pairs_come_from_task_grades_and_ignore_session_grades(home, monkeypatch, capsys):
+    store = Store()
+    seed(store, "s1", quality=7.0)
+    store.save_human_grade("an-old-session-id", 1.0)
+    grade_with(monkeypatch, ["8"])
+    main(["calibrate"])
+    out = capsys.readouterr().out
+    assert "Judge agrees with you on 1 of 1 runs" in out
+    assert "Abstentions: 0." in out

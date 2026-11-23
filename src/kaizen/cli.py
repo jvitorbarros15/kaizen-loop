@@ -19,7 +19,6 @@ from kaizen.pipeline import (
     find_transcripts,
     record_session,
     refresh_pr_outcomes,
-    run_end_times,
     score_run,
     score_task,
     scored_runs,
@@ -27,6 +26,7 @@ from kaizen.pipeline import (
 from kaizen.redact import redact
 from kaizen.report import calibration_summary, render_report
 from kaizen.store import Store, kaizen_home
+from kaizen.tasks import TITLE_MAX
 
 RUNNER = run_subprocess
 SUSPECTS_SHOWN = 20
@@ -288,20 +288,34 @@ def _clock(ended_at: datetime | None) -> str:
     return ended_at.astimezone().strftime("%H:%M") if ended_at else "unknown"
 
 
-def _show_for_grading(index: int, total: int, project: str, ended_at: datetime | None, packet: dict) -> None:
+def _show_for_grading(
+    index: int, total: int, project: str, ended_at: datetime | None, saved: dict, packet: dict
+) -> None:
     calls = packet["counts"]["tool_calls"]
-    header = f"[{index}/{total}]  {project}  ·  ended {_clock(ended_at)}  ·  {calls} tool call{'s' * (calls != 1)}"
+    files = saved.get("files_edited", 0)
+    header = (
+        f"[{index}/{total}]  {project}  ·  ended {_clock(ended_at)}  ·  {calls} tool call{'s' * (calls != 1)}"
+        f"  ·  {files} file{'s' * (files != 1)}"
+    )
     say("-" * 60)
     say(paint(_cut(header, SCREEN_WIDTH), "bold"))
-    for line in _task_rows(packet["task"]):
+    for line in _task_rows(_flat(saved.get("title") or "")):
         say(line)
     say(_row("Files", _files_line(packet["changed_files"])))
     say(_row("Tests", _runs_line(packet["test_runs"])))
     say(_row("Checks", _runs_line(packet["check_runs"])))
-    for line in _list_rows("Asked later", packet["later_requests"]):
+    for line in _list_rows("Asked later", _other_prompts(packet, saved.get("title") or "")):
         say(line)
     for line in _list_rows("Corrected", packet.get("corrections") or []):
         say(line)
+
+
+def _other_prompts(packet: dict, title: str) -> list[str]:
+    prompts = [packet["task"], *packet["later_requests"]]
+    for i, text in enumerate(prompts):
+        if _flat(text)[:TITLE_MAX] == title:
+            return prompts[:i] + prompts[i + 1 :]
+    return prompts
 
 
 def _show_comparison(grade: float, verdict: dict) -> None:
@@ -329,30 +343,31 @@ def _parse_time(text: str | None) -> datetime | None:
 def cmd_calibrate(args) -> int:
     store = Store()
     config = load_config()
-    graded = {sid for sid, _ in store.human_grades()}
-    ends = run_end_times(store)
+    graded = {key for key, _ in store.human_grades()}
+    current = {(t.session_id, t.index): t.key for t in store.list_tasks()}
     cutoff = now() - timedelta(hours=args.hours)
     recent = []
-    for sid, saved in scored_runs(store):
-        ended = _parse_time(ends.get(sid))
+    for key, saved in store.list_task_scores():
+        ended = _parse_time(saved.get("ended_at"))
         has_quality = (saved.get("verdict") or {}).get("quality") is not None
-        if sid not in graded and has_quality and ended is not None and ended >= cutoff:
-            recent.append((ended, sid, saved))
+        alive = current.get((saved.get("session_id"), saved.get("idx"))) == key
+        if key not in graded and has_quality and alive and ended is not None and ended >= cutoff:
+            recent.append((ended, key, saved))
     recent.sort(key=lambda item: (item[0], item[1]), reverse=True)
     todo = recent[: args.n]
     if not todo:
         say(
-            f"No scored session ended in the last {args.hours:g} hours and still waits for your grade; "
-            "work in Claude Code, then run kaizen score --pending."
+            f"No graded task ended in the last {args.hours:g} hours and still waits for your grade; "
+            "work in Claude Code, then run kaizen score --tasks."
         )
-    for index, (ended, sid, saved) in enumerate(todo, 1):
-        built = build_run_packet(sid, store, config)
+    for index, (ended, key, saved) in enumerate(todo, 1):
+        built = build_task_packet(saved["session_id"], saved["idx"], store, config)
         if built is None:
             continue
         packet = built[0]
         if saved.get("corrections_known"):
             packet["corrections"] = saved["signals"].get("corrections") or []
-        _show_for_grading(index, len(todo), saved.get("repo") or sid, ended, packet)
+        _show_for_grading(index, len(todo), saved.get("repo") or saved["session_id"], ended, saved, packet)
         while True:
             try:
                 answer = read_line("Your grade 0-10 (Enter skips, q stops): ").strip().lower()
@@ -365,19 +380,19 @@ def cmd_calibrate(args) -> int:
             except ValueError:
                 grade = -1.0
             if 0 <= grade <= 10:
-                store.save_human_grade(sid, grade)
+                store.save_human_grade(key, grade)
                 _show_comparison(grade, saved["verdict"])
                 break
             say("Enter a number from 0 to 10.")
         if answer == "q":
             break
-    scores = dict(scored_runs(store))
+    scores = dict(store.list_task_scores())
     pairs = []
     abstained = 0
-    for sid, grade in store.human_grades():
-        quality = (scores.get(sid, {}).get("verdict") or {}).get("quality")
+    for key, grade in store.human_grades():
+        quality = (scores.get(key, {}).get("verdict") or {}).get("quality")
         if quality is None:
-            abstained += scores.get(sid) is not None
+            abstained += scores.get(key) is not None
         else:
             pairs.append((quality, grade))
     say("")
@@ -438,7 +453,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-model", action="store_true", help="group corrections by exact wording, no model call")
     p.set_defaults(func=cmd_report)
 
-    p = sub.add_parser("calibrate", help="grade runs blind and compare with the judge")
+    p = sub.add_parser("calibrate", help="grade recent tasks blind and compare with the judge")
     p.add_argument("--n", type=int, default=10)
     p.add_argument("--hours", type=float, default=24)
     p.set_defaults(func=cmd_calibrate)

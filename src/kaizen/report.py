@@ -324,6 +324,72 @@ def _correction_lines(groups: tuple[list[Group], str], graded: int) -> list[str]
     return out
 
 
+def _fit(text: str, room: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= room else text[: room - 3].rstrip() + "..."
+
+
+def _lowest_item(verdict: dict) -> str:
+    scored = [
+        (entry["score"], name, entry.get("reason") or "")
+        for name, entry in (verdict.get("items") or {}).items()
+        if isinstance(entry, dict) and entry.get("score") is not None
+    ]
+    if not scored:
+        return ""
+    _, name, reason = min(scored, key=lambda item: item[0])
+    return f"{name}: {reason}" if reason.strip() else name
+
+
+def _graded_task_lines(store: Store, days: int, now: datetime) -> list[str]:
+    cutoff = now - timedelta(days=days)
+    seen: set = set()
+    everything = []
+    window: list[tuple[datetime, dict]] = []
+    for key, saved in store.list_task_scores():
+        ident = (saved.get("session_id"), saved.get("idx")) if saved.get("session_id") else key
+        if ident in seen:
+            continue
+        seen.add(ident)
+        everything.append(saved)
+        moment = _moment(saved.get("started_at"))
+        if moment is not None and moment >= cutoff:
+            window.append((moment, saved))
+    if not everything:
+        return ["No task has been graded yet. Run kaizen score --tasks."]
+    if not window:
+        return [f"No task was graded in the last {days} days. Use --days to look further back."]
+
+    graded = [(m, t) for m, t in window if _quality(t) is not None]
+    abstained = sum(bool((t.get("verdict") or {}).get("abstained")) for _, t in window)
+    out = [_heading(f"Graded tasks ({len(graded)} graded, {abstained} abstained, last {days} days)")]
+    if not graded:
+        return out + ["  No task has a judge quality in this period."]
+
+    by_project: dict[str, list[float]] = {}
+    for _, t in graded:
+        by_project.setdefault(t.get("repo") or NO_PROJECT, []).append(_quality(t))
+    order = sorted(by_project, key=lambda n: (-len(by_project[n]), n))
+    width = max(len(n) for n in order)
+    cells = [
+        f"{n:<{width}}   {mean(by_project[n]):.1f} avg over {_plural(len(by_project[n]), 'task')}" for n in order
+    ]
+    joined = "  " + "     ".join(cells)
+    out += [joined] if len(joined) <= LINE_MAX else [f"  {c}" for c in cells]
+
+    out.append("Lowest graded tasks")
+    lowest = sorted(graded, key=lambda pair: _quality(pair[1]))[:LOWEST_MAX]
+    project_width = max(len(t.get("repo") or NO_PROJECT) for _, t in lowest)
+    for moment, t in lowest:
+        date = moment.astimezone().strftime("%Y-%m-%d")
+        prefix = f"  {_quality(t):.1f}  {date}  {(t.get('repo') or NO_PROJECT):<{project_width}}   "
+        out.append(prefix + _fit(t.get("title") or "", LINE_MAX - len(prefix)))
+        reason = _lowest_item(t.get("verdict") or {})
+        if reason:
+            out.append("       " + _fit(reason, LINE_MAX - 7))
+    return out
+
+
 def render_report(
     store: Store,
     last: int = 20,
@@ -335,14 +401,18 @@ def render_report(
     scored = scored_runs(store)
     if not scored and not pending:
         return "Nothing recorded yet. Run `kaizen import` then `kaizen score --pending`."
-    out = _task_sections(store, days, now or datetime.now(UTC))
+    now = now or datetime.now(UTC)
+    out = _task_sections(store, days, now)
     runs = [score for _, score in scored[:last]]
     out.append("")
     if runs:
-        out += _correction_lines(groups or ([], "model"), len(runs)) + [""] + _graded_sections(runs, pending)
+        out += _correction_lines(groups or ([], "model"), len(runs)) + [""]
+        out += _graded_task_lines(store, days, now) + [""] + _graded_sections(runs, pending)
     else:
         out += [
             "Corrections are extracted when sessions are graded. Run kaizen score --pending.",
+            "",
+            *_graded_task_lines(store, days, now),
             "",
             "No session has been graded yet. Run kaizen score --pending.",
         ]
