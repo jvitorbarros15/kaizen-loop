@@ -1,8 +1,8 @@
 import json
 
 import pytest
-from kaizen.judge.packet import build_packet
 
+from kaizen.judge.packet import build_packet
 from kaizen.record.model import RunRecord, ToolCall, Usage
 from kaizen.signals import Signals, TestRun
 

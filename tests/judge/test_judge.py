@@ -2,11 +2,11 @@ import json
 import os
 
 import pytest
-from kaizen.judge.judge import Verdict, backends_for, judge
-from kaizen.judge.rubric import RUBRIC, RUBRIC_ITEMS, RUBRIC_VERSION
 
 from kaizen.config import DEFAULTS
 from kaizen.external import CLAUDE_ARGV, POSITIONAL_PROMPT
+from kaizen.judge.judge import Verdict, backends_for, judge
+from kaizen.judge.rubric import RUBRIC, RUBRIC_ITEMS, RUBRIC_VERSION
 
 PACKET = {"task": "add a flag", "changed_files": ["a.py"]}
 
