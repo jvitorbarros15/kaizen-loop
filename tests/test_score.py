@@ -128,6 +128,16 @@ def test_size_bucket_normalises_backslashes():
     assert size_bucket(rec(calls)) == "1-2"
 
 
+def test_size_bucket_treats_windows_paths_case_insensitively():
+    calls = [edit("C:\\Dev\\A.py"), edit("c:/dev/a.py"), edit("c.py")]
+    assert size_bucket(rec(calls)) == "1-2"
+
+
+def test_size_bucket_keeps_posix_case_distinct():
+    assert size_bucket(rec([edit("/a/A.py"), edit("/a/a.py")])) == "1-2"
+    assert size_bucket(rec([edit("/a/A.py"), edit("/a/a.py"), edit("/b.py")])) == "3-9"
+
+
 def test_size_bucket_counts_write_multiedit_and_notebook():
     calls = [
         edit("a.py", "Write"),
@@ -170,6 +180,11 @@ def test_baseline_prefers_bucket():
 def test_baseline_ignores_other_repos():
     history = hist(5, repo="other", bucket="1-2") + hist(4, bucket="1-2")
     assert baseline_for(stats(bucket="1-2"), history) is None
+
+
+def test_baseline_none_when_repo_is_unknown():
+    history = hist(10, repo=None, bucket="1-2")
+    assert baseline_for(stats(repo=None, bucket="1-2"), history) is None
 
 
 def test_baseline_medians():

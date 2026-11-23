@@ -118,7 +118,7 @@ def test_relative_paths_and_outside_cwd_reduced_to_name():
     ]
     p = packet(make(calls))
     assert p["changed_files"] == ["src/a.py", "b.py", "nb/c.ipynb"]
-    assert [e["file"] for e in p["edits"]] == ["src/a.py", "b.py", "src/a.py"]
+    assert [e["file"] for e in p["edits"]] == ["src/a.py", "b.py", "src/a.py", "nb/c.ipynb"]
 
 
 def test_windows_paths():
@@ -296,3 +296,29 @@ def test_final_message_never_appears():
     rec = make([edit(f"{CWD}/a.py")])
     rec.final_message = "Everything is verified and perfect."
     assert "verified and perfect" not in json.dumps(packet(rec))
+
+
+def test_notebook_edit_entry_shape():
+    p = packet(make([call("NotebookEdit", notebook_path=f"{CWD}/nb/c.ipynb", new_source="print(1)")]))
+    assert p["edits"] == [{"file": "nb/c.ipynb", "new": "print(1)"}]
+
+
+def test_notebook_edit_shares_edit_budget():
+    p = packet(make([call("NotebookEdit", notebook_path=f"{CWD}/c.ipynb", new_source="n" * 7000)]))
+    assert len(p["edits"][0]["new"]) == 6000
+    assert p["edits_truncated"] is True
+
+
+def test_notebook_edit_without_source_is_empty_text():
+    p = packet(make([call("NotebookEdit", notebook_path=f"{CWD}/c.ipynb")]))
+    assert p["edits"] == [{"file": "c.ipynb", "new": ""}]
+
+
+def test_secret_straddling_task_cut_never_leaves_prefix():
+    task = "x" * (1500 - 10) + SECRET
+    assert SECRET[:6] not in json.dumps(packet(make(messages=[task])))
+
+
+def test_secret_straddling_later_request_cut_never_leaves_prefix():
+    later = "y" * (300 - 10) + SECRET
+    assert SECRET[:6] not in json.dumps(packet(make(messages=["first", later])))
