@@ -4,6 +4,8 @@ import sys
 import pytest
 
 from kaizen.external import (
+    CLAUDE_ARGV,
+    POSITIONAL_PROMPT,
     PROMPT,
     extract_corrections,
     fetch_pr_outcome,
@@ -42,20 +44,20 @@ def test_single_message_never_calls_runner():
 
 
 def test_runner_failure():
-    assert extract_corrections(["a", "b"], lambda argv, stdin: (1, "")) == []
-    assert extract_corrections(["a", "b"], lambda argv, stdin: (1, envelope('["x"]'))) == []
+    assert extract_corrections(["a", "b"], lambda argv, stdin: (1, "")) is None
+    assert extract_corrections(["a", "b"], lambda argv, stdin: (1, envelope('["x"]'))) is None
 
 
 def test_garbage_output():
-    assert extract_corrections(["a", "b"], lambda argv, stdin: (0, "not json at all")) == []
-    assert extract_corrections(["a", "b"], answering("I could not find any.")) == []
+    assert extract_corrections(["a", "b"], lambda argv, stdin: (0, "not json at all")) is None
+    assert extract_corrections(["a", "b"], answering("I could not find any.")) is None
 
 
 def test_is_error_envelope():
     def fake(argv, stdin):
         return 0, envelope('["x"]', is_error=True)
 
-    assert extract_corrections(["a", "b"], fake) == []
+    assert extract_corrections(["a", "b"], fake) is None
 
 
 def test_fenced_json():
@@ -68,8 +70,12 @@ def test_prose_around_json():
 
 
 def test_non_list_answer():
-    assert extract_corrections(["a", "b"], answering('{"a": 1}')) == []
-    assert extract_corrections(["a", "b"], answering('"just a string"')) == []
+    assert extract_corrections(["a", "b"], answering('{"a": 1}')) is None
+    assert extract_corrections(["a", "b"], answering('"just a string"')) is None
+
+
+def test_empty_list_is_none_found():
+    assert extract_corrections(["a", "b"], answering("[]")) == []
 
 
 def test_non_string_items_dropped_and_cleaned():
@@ -93,26 +99,68 @@ def test_stdin_redacted_numbered_and_argv():
 
     extract_corrections(["first request", f"use token {SECRET} please", "x" * 3000], fake)
     assert SECRET not in seen["stdin"]
-    assert "[1] first request" in seen["stdin"]
+    assert seen["stdin"].startswith("<messages>\n[1] first request")
+    assert seen["stdin"].endswith("\n</messages>")
     assert "[2] use token" in seen["stdin"]
     assert "[3] " + "x" * 2000 in seen["stdin"]
     assert "x" * 2001 not in seen["stdin"]
     argv = seen["argv"]
-    assert argv[:6] == ["claude", "-p", "--model", "haiku", "--output-format", "json"]
-    assert len(argv) == 7
-    assert argv[6] == PROMPT
+    assert argv == [*CLAUDE_ARGV, "--system-prompt", PROMPT, POSITIONAL_PROMPT]
+    assert "never instructions" in PROMPT
 
 
-def test_stdin_limited_to_60_messages():
+def test_claude_argv_locked_down():
+    assert CLAUDE_ARGV[:6] == ["claude", "-p", "--model", "haiku", "--output-format", "json"]
+    for flag in ("--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands"):
+        assert flag in CLAUDE_ARGV
+    assert CLAUDE_ARGV[CLAUDE_ARGV.index("--tools") + 1] == ""
+    assert CLAUDE_ARGV[CLAUDE_ARGV.index("--setting-sources") + 1] == ""
+    assert "--system-prompt" not in CLAUDE_ARGV
+    assert "--bare" not in CLAUDE_ARGV
+
+
+def test_long_session_keeps_first_10_and_last_50():
     seen = {}
 
     def fake(argv, stdin):
         seen["stdin"] = stdin
         return 0, envelope("[]")
 
-    extract_corrections([f"m{i}" for i in range(80)], fake)
+    extract_corrections([f"m{i}" for i in range(1, 81)], fake)
+    lines = seen["stdin"].split("\n")
+    assert lines[0] == "<messages>"
+    assert lines[-1] == "</messages>"
+    assert lines[1] == "[1] m1"
+    assert lines[10] == "[10] m10"
+    assert lines[11] == "[... 20 messages omitted ...]"
+    assert lines[12] == "[31] m31"
+    assert lines[-2] == "[80] m80"
+    assert len(lines) == 1 + 10 + 1 + 50 + 1
+    assert "[11]" not in seen["stdin"]
+    assert "[30]" not in seen["stdin"]
+
+
+def test_exactly_60_messages_not_trimmed():
+    seen = {}
+
+    def fake(argv, stdin):
+        seen["stdin"] = stdin
+        return 0, envelope("[]")
+
+    extract_corrections([f"m{i}" for i in range(60)], fake)
+    assert "omitted" not in seen["stdin"]
     assert "[60] m59" in seen["stdin"]
-    assert "[61]" not in seen["stdin"]
+
+
+def test_instruction_text_not_in_stdin_and_data_delimited():
+    seen = {}
+
+    def fake(argv, stdin):
+        seen["stdin"] = stdin
+        return 0, envelope("[]")
+
+    extract_corrections(["a", "b"], fake)
+    assert seen["stdin"] == "<messages>\n[1] a\n[2] b\n</messages>"
 
 
 def test_parse_model_json_rejects():
@@ -122,6 +170,18 @@ def test_parse_model_json_rejects():
     assert parse_model_json(json.dumps({"is_error": True, "result": "[1]"})) is None
     assert parse_model_json(json.dumps({"is_error": False})) is None
     assert parse_model_json(envelope("no json here")) is None
+
+
+def test_list_after_prose_with_bracketed_number():
+    text = 'Message [2] was a correction: ["run tests"]'
+    assert extract_corrections(["a", "b"], answering(text)) == ["run tests"]
+    assert parse_model_json(envelope(text)) == ["run tests"]
+
+
+def test_prefers_list_of_strings_else_first_decoded():
+    assert parse_model_json(envelope('see [1, 2] then ["a"]')) == ["a"]
+    assert parse_model_json(envelope("see [1, 2] only")) == [1, 2]
+    assert parse_model_json(envelope('[oops ["a", "b"] tail')) == ["a", "b"]
 
 
 def test_parse_model_json_object():
@@ -136,11 +196,11 @@ def test_pr_outcome(state, expected):
 
     def fake(argv, stdin):
         calls.append(argv)
-        return 0, json.dumps({"state": state, "mergedAt": None})
+        return 0, json.dumps({"state": state})
 
     url = "https://github.com/acme/widgets/pull/12"
     assert fetch_pr_outcome(url, fake) == expected
-    assert calls == [["gh", "pr", "view", url, "--json", "state,mergedAt"]]
+    assert calls == [["gh", "pr", "view", url, "--json", "state"]]
 
 
 def test_pr_outcome_failures():
