@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from kaizen.record.model import RunRecord, ToolCall, Usage
@@ -156,6 +157,14 @@ def _repo(cwd: str) -> str | None:
     return name or None
 
 
+def _when(ts: str) -> tuple[int, datetime | str]:
+    try:
+        parsed = datetime.fromisoformat(ts)
+    except ValueError:
+        return 1, ts
+    return 0, parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
 def _add(acc: Usage, u: Usage) -> None:
     acc.input += u.input
     acc.cache_write += u.cache_write
@@ -206,9 +215,10 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
             ts = obj.get("timestamp")
             ts = ts if isinstance(ts, str) else ""
             if ts:
-                if not started or ts < started:
+                if not started or _when(ts) < _when(started):
                     started = ts
-                ended = max(ended, ts)
+                if not ended or _when(ts) > _when(ended):
+                    ended = ts
             skill = obj.get("attributionSkill")
             if isinstance(skill, str) and skill and skill not in skills:
                 skills.append(skill)
@@ -224,13 +234,14 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
                     key = msg.get("id")
                     if not isinstance(key, str):
                         key = f"line-{n}"
+                    seen_model, seen = usage_by_msg.get(key, ("", Usage()))
                     usage_by_msg[key] = (
-                        str(msg.get("model") or "unknown"),
+                        str(msg.get("model") or "") or seen_model,
                         Usage(
-                            input=_int(u.get("input_tokens")),
-                            cache_write=_int(u.get("cache_creation_input_tokens")),
-                            cache_read=_int(u.get("cache_read_input_tokens")),
-                            output=_int(u.get("output_tokens")),
+                            input=max(seen.input, _int(u.get("input_tokens"))),
+                            cache_write=max(seen.cache_write, _int(u.get("cache_creation_input_tokens"))),
+                            cache_read=max(seen.cache_read, _int(u.get("cache_read_input_tokens"))),
+                            output=max(seen.output, _int(u.get("output_tokens"))),
                         ),
                     )
                 if isinstance(content, list):
@@ -275,11 +286,12 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
                         call.is_error = block.get("is_error") is True
                         if call.is_error or call.name in SHELL_TOOLS:
                             call.output_excerpt = _excerpt(text)
-                        if call.is_error:
-                            m = EXIT_CODE.match(text)
-                            call.exit_code = int(m.group(1)) if m else None
-                        else:
-                            call.exit_code = 0
+                        if call.name in SHELL_TOOLS:
+                            if call.is_error:
+                                m = EXIT_CODE.match(text)
+                                call.exit_code = int(m.group(1)) if m else None
+                            else:
+                                call.exit_code = 0
                 if not has_result and obj.get("isMeta") is not True:
                     text, interrupted = _prompt(content)
                     interruptions += interrupted
@@ -296,7 +308,7 @@ def _parse(path: Path, agent_id: str | None) -> RunRecord:
 
     usage: dict[str, Usage] = {}
     for model, u in usage_by_msg.values():
-        _add(usage.setdefault(model, Usage()), u)
+        _add(usage.setdefault(model or "unknown", Usage()), u)
 
     return RunRecord(
         session_id=session_id or path.stem,
@@ -343,9 +355,10 @@ def parse_session(path: Path) -> RunRecord:
         record.interruptions += child.interruptions
         record.pr_urls += [u for u in child.pr_urls if u not in record.pr_urls]
         record.skills_used += [s for s in child.skills_used if s not in record.skills_used]
-        if child.started_at and (not record.started_at or child.started_at < record.started_at):
+        if child.started_at and (not record.started_at or _when(child.started_at) < _when(record.started_at)):
             record.started_at = child.started_at
-        record.ended_at = max(record.ended_at, child.ended_at)
-    keyed.sort(key=lambda pair: pair[0])
+        if child.ended_at and (not record.ended_at or _when(child.ended_at) > _when(record.ended_at)):
+            record.ended_at = child.ended_at
+    keyed.sort(key=lambda pair: _when(pair[0]))
     record.tool_calls = [call for _, call in keyed]
     return record

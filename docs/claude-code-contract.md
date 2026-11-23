@@ -52,6 +52,7 @@ Caveat for every "observed" item: runs were made with `claude -p` (headless). Th
 - Usage and tool calls of the subagent are only in the subagent file. Parent `assistant` lines do not include them.
 - The `-p --output-format json` envelope also has `subagent_stats` (`spawned`, `completed`, `failed`, `by_type`, ...).
 - `attributionAgent: "general-purpose"` appears on subagent assistant lines.
+- **Cost (observed, 29 real sessions, 2026-11-23):** the parent's last `cost-state.modelUsage` already lists models that only subagents used, so the parent's `totalCostUSD` includes subagent cost. Never add subagent cost on top.
 
 ## 3. Failing shell command
 
