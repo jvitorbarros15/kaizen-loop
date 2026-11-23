@@ -1,3 +1,6 @@
+import contextlib
+import sqlite3
+
 from kaizen.record.model import RunRecord, ToolCall, Usage
 from kaizen.redact import redact_obj
 from kaizen.store import Store, kaizen_home
@@ -190,3 +193,65 @@ def test_file_count_and_clean_audit_on_empty_store(tmp_path):
     assert s.file_count() == 1
     assert s.audit() == []
     assert s.audit_suspects() == []
+
+
+def extra_call():
+    return ToolCall(id="toolu_2", name="Bash", input={"command": "pwd"}, exit_code=0)
+
+
+def test_unchanged_resave_keeps_score(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(make_record())
+    s.save_score("s1", {"quality": 0.9})
+    s.save_run(make_record())
+    assert s.get_score("s1") == {"quality": 0.9}
+    assert s.pending_scores() == []
+
+
+def test_changed_resave_drops_score_and_marks_pending(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(make_record())
+    s.save_score("s1", {"quality": 0.9})
+    s.save_human_grade("s1", 0.5)
+    rec = make_record()
+    rec.tool_calls.append(extra_call())
+    s.save_run(rec)
+    assert s.get_score("s1") is None
+    assert s.pending_scores() == ["s1"]
+    assert s.human_grades() == [("s1", 0.5)]
+
+
+def test_pending_scores_newest_first(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(make_record(session_id="a", started_at="2026-01-01T00:00:00Z"))
+    s.save_run(make_record(session_id="b", started_at="2026-01-03T00:00:00Z"))
+    s.save_run(make_record(session_id="c", started_at="2026-01-02T00:00:00Z"))
+    s.save_score("c", {"quality": 1})
+    assert s.pending_scores() == ["b", "a"]
+
+
+def test_rebuild_index_restores_runs_from_files(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(make_record(session_id="a", started_at="2026-01-01T00:00:00Z"))
+    s.save_run(make_record(session_id="b", started_at="2026-01-03T00:00:00Z"))
+    s.save_score("a", {"quality": 0.4})
+    (s.runs_dir / "junk.json").write_text("{not json", encoding="utf-8")
+    with contextlib.closing(sqlite3.connect(s.db_path)) as db, db:
+        db.execute("DELETE FROM runs")
+    assert s.list_runs() == []
+    assert s.rebuild_index() == 2
+    assert [r.session_id for r in s.list_runs()] == ["b", "a"]
+    assert s.get_score("a") == {"quality": 0.4}
+
+
+def test_journal_mode_is_wal(tmp_path):
+    s = Store(tmp_path)
+    with contextlib.closing(s._connect()) as db:
+        assert db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_audit_suspects_scans_ledger(tmp_path):
+    s = Store(tmp_path)
+    s.save_run(make_record())
+    s.save_score("s1", {"reasons": ["saw Zx9kQ2mP7vLr4TnW8bYc3HdJ in output"]})
+    assert s.audit_suspects() == [("ledger.db", "Zx9k…(24 chars)")]
