@@ -39,6 +39,11 @@ def scored_ids(store: Store) -> list[str]:
         return [row[0] for row in db.execute("SELECT session_id FROM scores")]
 
 
+def run_end_times(store: Store) -> dict[str, str]:
+    with contextlib.closing(sqlite3.connect(store.db_path, timeout=30)) as db, db:
+        return {row[0]: row[1] for row in db.execute("SELECT session_id, ended_at FROM runs")}
+
+
 def scored_runs(store: Store) -> list[tuple[str, dict]]:
     pairs = [(sid, score) for sid in scored_ids(store) if (score := store.get_score(sid)) is not None]
     return sorted(pairs, key=lambda p: (p[1].get("started_at") or "", p[0]), reverse=True)
