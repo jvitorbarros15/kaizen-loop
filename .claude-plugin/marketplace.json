@@ -1,0 +1,11 @@
+{
+  "name": "kaizen-loop",
+  "owner": { "name": "kaizen-loop" },
+  "plugins": [
+    {
+      "name": "kaizen",
+      "source": "./plugin",
+      "description": "Records each Claude Code session to a local store with secrets redacted, so it can be graded and reported."
+    }
+  ]
+}
