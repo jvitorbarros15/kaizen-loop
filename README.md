@@ -56,23 +56,27 @@ Install the CLI from a clone:
 uv tool install .
 ```
 
-Load the plugin for one session, which records that session when it ends:
+Install the plugin, from the root of the clone, so every session is recorded when it ends:
 
 ```bash
-claude --plugin-dir ./plugin
+claude plugin marketplace add .
+claude plugin install kaizen@kaizen-loop
 ```
 
-To have it on in every session, add the repository as a local marketplace (the plugin needs a `.claude-plugin/marketplace.json` listing `./plugin`), then run `claude plugin marketplace add <dir>` and `claude plugin install kaizen@<marketplace>`. I did not test this persistent route; only `--plugin-dir` has been run.
+To try it for one session only, without installing: `claude --plugin-dir ./plugin`.
 
-The hook only starts a background process and returns at once, so it does not slow down closing a session.
+The plugin adds two hooks. When a session ends, one starts a background process that records it and returns at once (about 0.3 s). On each prompt, the other checks whether the prompt is a rating and otherwise does nothing (about 0.08 s on Windows). `claude plugin uninstall kaizen@kaizen-loop` removes both.
 
 First use:
 
 ```bash
-kaizen import
-kaizen score --pending
-kaizen report
+kaizen import          # record the sessions already on disk
+kaizen report          # what each task did; no model call
+kaizen score --tasks   # have the judge grade tasks that edited files
+kaizen check-judge     # is the judge tracking anything?
 ```
+
+Rate a task while it is fresh by typing `kz 7` as a prompt inside Claude Code, or `kz 4 merged without review` with a note. The prompt is saved and blocked, so the model never sees it. From a terminal, `kaizen rate 7` does the same for the most recent session.
 
 Recordings stay on your machine with secrets removed. Grading sends a redacted summary to a small model through your own Claude subscription, and to Codex only for repositories you list in `~/.kaizen/config.toml`.
 
